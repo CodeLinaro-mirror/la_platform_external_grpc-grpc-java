@@ -1,3 +1,4 @@
+//
 // Copyright (C) 2018 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,12 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// TODO: build from source instead
-
+// TODO: Build from source instead
 java_import_host {
-    name: "grpc-java-core",
+    name: "grpc-java-protobuf",
     jars: [
-        "grpc-core-1.14.0.jar",
+        "grpc-protobuf-1.14.0.jar",
     ],
 }
-
