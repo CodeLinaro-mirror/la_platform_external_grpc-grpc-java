@@ -1,3 +1,4 @@
+//
 // Copyright (C) 2018 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,18 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//
-
-java_library {
-    name: "grpc-java-protobuf-lite",
-    host_supported: true,
-    srcs: [
-        "src/main/java/**/*.java",
-    ],
-    libs: [
-        "grpc-java-core",
-        "guava",
-        "jsr305",
-        "libprotobuf-java-lite",
+// TODO: Build from source instead
+java_import_host {
+    name: "grpc-java-netty-shaded",
+    jars: [
+        "grpc-netty-shaded-1.14.0.jar",
     ],
 }
