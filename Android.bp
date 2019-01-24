@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// TODO: build from source instead
+//
 
-java_import_host {
-    name: "grpc-java-core",
-    jars: [
-        "grpc-core-1.14.0.jar",
-    ],
+java_library_host {
+    name: "grpc-java",
+    static_libs: [
+        "grpc-java-core",
+	"grpc-java-context",
+	"grpc-java-protobuf",
+	"grpc-java-stub",
+	"grpc-java-netty-shaded",
+    ]
 }
-
