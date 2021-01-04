@@ -1,4 +1,5 @@
-// Copyright (C) 2018 The Android Open Source Project
+//
+// Copyright (C) 2020 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,22 +14,14 @@
 // limitations under the License.
 //
 
+// The below module imports the Netty shaded binary from the Maven repository
+// since it's not trivial to build from source due to the large number of
+// external dependencies and missing build-system support.
+//
+// WARNING: The artifact version must match the source to avoid runtime issues.
 java_library_host {
-    name: "grpc-java-okhttp",
-    srcs: [
-        "third_party/okhttp/main/java/**/*.java",
-        "src/main/java/**/*.java",
-    ],
-    java_resource_dirs: [
-        "src/main/resources",
-    ],
-    libs: [
-        "grpc-java-core",
-        "grpc-java-core-internal",
-        "jsr305",
-        "guava",
-    ],
+    name: "grpc-java-netty-shaded",
     static_libs: [
-        "okhttp-norepackage",
+        "grpc-netty-shaded-1.16.1-jar",
     ],
 }
