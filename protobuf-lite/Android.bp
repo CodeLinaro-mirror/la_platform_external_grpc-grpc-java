@@ -36,4 +36,9 @@ java_library {
         "libprotobuf-java-lite",
     ],
     sdk_version: "current",
+    min_sdk_version: "33",
+    apex_available: [
+        "com.android.adservices",
+        "com.android.devicelock",
+    ],
 }

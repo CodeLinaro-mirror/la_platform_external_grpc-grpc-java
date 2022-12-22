@@ -37,6 +37,11 @@ java_library {
         "guava",
     ],
     sdk_version: "current",
+    min_sdk_version: "33",
+    apex_available: [
+        "com.android.adservices",
+        "com.android.devicelock",
+    ],
 }
 
 java_library {
@@ -66,7 +71,7 @@ java_library {
         "grpc-java-core",
         "grpc-java-context",
         "jsr305",
-        "gson-prebuilt-jar",
+        "gson",
         "error_prone_annotations",
         "guava",
         "opencensus-java-api",
@@ -84,6 +89,14 @@ java_library {
         },
     },
     sdk_version: "current",
+    min_sdk_version: "33",
+    apex_available: ["com.android.adservices"],
+
+    errorprone: {
+        javacflags: [
+            "-Xep:BanJNDI:WARN",
+        ],
+    },
 }
 
 java_library {
