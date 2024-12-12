@@ -22,7 +22,9 @@ import static io.grpc.xds.XdsTestControlPlaneService.ADS_TYPE_URL_LDS;
 import static io.grpc.xds.XdsTestControlPlaneService.ADS_TYPE_URL_RDS;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Lists;
 import com.google.protobuf.Any;
+import com.google.protobuf.BoolValue;
 import com.google.protobuf.Message;
 import com.google.protobuf.UInt32Value;
 import io.envoyproxy.envoy.config.cluster.v3.Cluster;
@@ -51,9 +53,10 @@ import io.envoyproxy.envoy.extensions.filters.http.router.v3.Router;
 import io.envoyproxy.envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager;
 import io.envoyproxy.envoy.extensions.filters.network.http_connection_manager.v3.HttpFilter;
 import io.envoyproxy.envoy.extensions.filters.network.http_connection_manager.v3.Rds;
+import io.grpc.Grpc;
+import io.grpc.InsecureServerCredentials;
 import io.grpc.NameResolverRegistry;
 import io.grpc.Server;
-import io.grpc.netty.NettyServerBuilder;
 import java.util.Collections;
 import java.util.Map;
 import java.util.UUID;
@@ -114,10 +117,11 @@ public class ControlPlaneRule extends TestWatcher {
     try {
       controlPlaneService = new XdsTestControlPlaneService();
       loadReportingService = new XdsTestLoadReportingService();
-      NettyServerBuilder controlPlaneServerBuilder = NettyServerBuilder.forPort(0)
+      server = Grpc.newServerBuilderForPort(0, InsecureServerCredentials.create())
           .addService(controlPlaneService)
-          .addService(loadReportingService);
-      server = controlPlaneServerBuilder.build().start();
+          .addService(loadReportingService)
+          .build()
+          .start();
     } catch (Exception e) {
       throw new AssertionError("unable to start the control plane server", e);
     }
@@ -157,7 +161,7 @@ public class ControlPlaneRule extends TestWatcher {
                 "channel_creds", Collections.singletonList(
                     ImmutableMap.of("type", "insecure")
                 ),
-                "server_features", Collections.singletonList("xds_v3")
+                "server_features", Lists.newArrayList("xds_v3", "trusted_xds_server")
             )
         ),
         "server_listener_resource_name_template", SERVER_LISTENER_TEMPLATE_NO_REPLACEMENT
@@ -195,7 +199,9 @@ public class ControlPlaneRule extends TestWatcher {
                 .setMatch(
                     RouteMatch.newBuilder().setPrefix("/").build())
                 .setRoute(
-                    RouteAction.newBuilder().setCluster(CLUSTER_NAME).build()).build()).build();
+                    RouteAction.newBuilder().setCluster(CLUSTER_NAME)
+                        .setAutoHostRewrite(BoolValue.newBuilder().setValue(true).build())
+                        .build()).build()).build();
     return RouteConfiguration.newBuilder().setName(RDS_NAME).addVirtualHosts(virtualHost).build();
   }
 
@@ -221,7 +227,8 @@ public class ControlPlaneRule extends TestWatcher {
   /**
    * Builds a new default EDS configuration.
    */
-  static ClusterLoadAssignment buildClusterLoadAssignment(String hostName, int port) {
+  static ClusterLoadAssignment buildClusterLoadAssignment(String hostName, String endpointHostname,
+      int port) {
     Address address = Address.newBuilder()
         .setSocketAddress(
             SocketAddress.newBuilder().setAddress(hostName).setPortValue(port).build()).build();
@@ -231,7 +238,8 @@ public class ControlPlaneRule extends TestWatcher {
         .addLbEndpoints(
             LbEndpoint.newBuilder()
                 .setEndpoint(
-                    Endpoint.newBuilder().setAddress(address).build())
+                    Endpoint.newBuilder()
+                        .setAddress(address).setHostname(endpointHostname).build())
                 .setHealthStatus(HealthStatus.HEALTHY)
                 .build()).build();
     return ClusterLoadAssignment.newBuilder()

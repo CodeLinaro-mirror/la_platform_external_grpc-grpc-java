@@ -17,9 +17,7 @@
 package io.grpc.xds.internal.security;
 
 import static com.google.common.truth.Truth.assertThat;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
-import com.google.common.io.CharStreams;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.BoolValue;
 import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.CertificateProviderPluginInstance;
@@ -32,14 +30,11 @@ import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContex
 import io.envoyproxy.envoy.type.matcher.v3.StringMatcher;
 import io.grpc.internal.testing.TestUtils;
 import io.grpc.testing.TlsTesting;
+import io.grpc.util.CertificateUtils;
 import io.grpc.xds.EnvoyServerProtoData;
-import io.grpc.xds.internal.security.trust.CertificateUtils;
 import io.netty.handler.ssl.SslContext;
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
@@ -53,10 +48,14 @@ public class CommonTlsContextTestsUtil {
   public static final String SERVER_0_PEM_FILE = "server0.pem";
   public static final String SERVER_0_KEY_FILE = "server0.key";
   public static final String SERVER_1_PEM_FILE = "server1.pem";
+  public static final String SERVER_1_SPIFFE_PEM_FILE = "server1_spiffe.pem";
   public static final String SERVER_1_KEY_FILE = "server1.key";
   public static final String CLIENT_PEM_FILE = "client.pem";
+  public static final String CLIENT_SPIFFE_PEM_FILE = "client_spiffe.pem";
   public static final String CLIENT_KEY_FILE = "client.key";
   public static final String CA_PEM_FILE = "ca.pem";
+  public static final String SPIFFE_TRUST_MAP_FILE = "spiffebundle.json";
+  public static final String SPIFFE_TRUST_MAP_1_FILE = "spiffebundle1.json";
   /** Bad/untrusted server certs. */
   public static final String BAD_SERVER_PEM_FILE = "badserver.pem";
   public static final String BAD_SERVER_KEY_FILE = "badserver.key";
@@ -195,20 +194,9 @@ public class CommonTlsContextTestsUtil {
   /** Gets a cert from contents of a resource. */
   public static X509Certificate getCertFromResourceName(String resourceName)
       throws IOException, CertificateException {
-    try (ByteArrayInputStream bais =
-        new ByteArrayInputStream(getResourceContents(resourceName).getBytes(UTF_8))) {
-      return CertificateUtils.toX509Certificate(bais);
+    try (InputStream cert = TlsTesting.loadCert(resourceName)) {
+      return CertificateUtils.getX509Certificates(cert)[0];
     }
-  }
-
-  /** Gets contents of a certs resource. */
-  public static String getResourceContents(String resourceName) throws IOException {
-    InputStream inputStream = TlsTesting.loadCert(resourceName);
-    String text = null;
-    try (Reader reader = new InputStreamReader(inputStream, UTF_8)) {
-      text = CharStreams.toString(reader);
-    }
-    return text;
   }
 
   @SuppressWarnings("deprecation")
@@ -266,21 +254,27 @@ public class CommonTlsContextTestsUtil {
       String rootInstanceName,
       String rootCertName,
       CertificateValidationContext staticCertValidationContext) {
+    CertificateProviderInstance providerInstance = null;
     if (rootInstanceName != null) {
-      CertificateProviderInstance providerInstance =
-          CertificateProviderInstance.newBuilder()
-              .setInstanceName(rootInstanceName)
-              .setCertificateName(rootCertName)
-              .build();
-      if (staticCertValidationContext != null) {
-        CombinedCertificateValidationContext combined =
-            CombinedCertificateValidationContext.newBuilder()
-                .setDefaultValidationContext(staticCertValidationContext)
-                .setValidationContextCertificateProviderInstance(providerInstance)
-                .build();
-        return builder.setCombinedValidationContext(combined);
-      }
+      providerInstance = CertificateProviderInstance.newBuilder()
+          .setInstanceName(rootInstanceName)
+          .setCertificateName(rootCertName)
+          .build();
+    }
+    if (providerInstance != null) {
       builder = builder.setValidationContextCertificateProviderInstance(providerInstance);
+    }
+    CombinedCertificateValidationContext.Builder combined =
+        CombinedCertificateValidationContext.newBuilder();
+    if (providerInstance != null) {
+      combined = combined.setValidationContextCertificateProviderInstance(providerInstance);
+    }
+    if (staticCertValidationContext != null) {
+      combined = combined.setDefaultValidationContext(staticCertValidationContext);
+    }
+    if (combined.hasValidationContextCertificateProviderInstance()
+        || combined.hasDefaultValidationContext()) {
+      builder = builder.setCombinedValidationContext(combined.build());
     }
     return builder;
   }
@@ -290,19 +284,19 @@ public class CommonTlsContextTestsUtil {
           String rootInstanceName,
           String rootCertName,
           CertificateValidationContext staticCertValidationContext) {
+    CertificateValidationContext.Builder validationContextBuilder =
+        staticCertValidationContext != null ? staticCertValidationContext.toBuilder()
+            : CertificateValidationContext.newBuilder();
     if (rootInstanceName != null) {
       CertificateProviderPluginInstance providerInstance =
           CertificateProviderPluginInstance.newBuilder()
               .setInstanceName(rootInstanceName)
               .setCertificateName(rootCertName)
               .build();
-      CertificateValidationContext.Builder validationContextBuilder =
-          staticCertValidationContext != null ? staticCertValidationContext.toBuilder()
-              : CertificateValidationContext.newBuilder();
-      return builder.setValidationContext(
-          validationContextBuilder.setCaCertificateProviderInstance(providerInstance));
+      validationContextBuilder = validationContextBuilder.setCaCertificateProviderInstance(
+          providerInstance);
     }
-    return builder;
+    return builder.setValidationContext(validationContextBuilder);
   }
 
   /** Helper method to build UpstreamTlsContext for CertProvider tests. */

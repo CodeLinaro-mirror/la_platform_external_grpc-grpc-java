@@ -50,6 +50,7 @@ import io.grpc.okhttp.internal.framed.Settings;
 import io.grpc.okhttp.internal.framed.Variant;
 import java.io.IOException;
 import java.net.Socket;
+import java.net.SocketException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -92,10 +93,10 @@ final class OkHttpServerTransport implements ServerTransport,
   private static final ByteString CONTENT_LENGTH = ByteString.encodeUtf8("content-length");
 
   private final Config config;
-  private final Socket bareSocket;
   private final Variant variant = new Http2();
   private final TransportTracer tracer;
   private final InternalLogId logId;
+  private Socket socket;
   private ServerTransportListener listener;
   private Executor transportExecutor;
   private ScheduledExecutorService scheduledExecutorService;
@@ -141,11 +142,11 @@ final class OkHttpServerTransport implements ServerTransport,
 
   public OkHttpServerTransport(Config config, Socket bareSocket) {
     this.config = Preconditions.checkNotNull(config, "config");
-    this.bareSocket = Preconditions.checkNotNull(bareSocket, "bareSocket");
+    this.socket = Preconditions.checkNotNull(bareSocket, "bareSocket");
 
     tracer = config.transportTracerFactory.create();
     tracer.setFlowControlWindowReader(this::readFlowControlWindow);
-    logId = InternalLogId.allocate(getClass(), bareSocket.getRemoteSocketAddress().toString());
+    logId = InternalLogId.allocate(getClass(), socket.getRemoteSocketAddress().toString());
     transportExecutor = config.transportExecutorPool.getObject();
     scheduledExecutorService = config.scheduledExecutorServicePool.getObject();
     keepAliveEnforcer = new KeepAliveEnforcer(config.permitKeepAliveWithoutCalls,
@@ -161,10 +162,24 @@ final class OkHttpServerTransport implements ServerTransport,
 
   private void startIo(SerializingExecutor serializingExecutor) {
     try {
-      bareSocket.setTcpNoDelay(true);
+      // The socket implementation is lazily initialized, but had broken thread-safety 
+      // for that laziness https://bugs.openjdk.org/browse/JDK-8278326. 
+      // As a workaround, we lock to synchronize initialization with shutdown().
+      synchronized (lock) {
+        socket.setTcpNoDelay(true);
+      }
       HandshakerSocketFactory.HandshakeResult result =
-          config.handshakerSocketFactory.handshake(bareSocket, Attributes.EMPTY);
-      Socket socket = result.socket;
+          config.handshakerSocketFactory.handshake(socket, Attributes.EMPTY);
+      synchronized (lock) {
+        if (socket.isClosed()) {
+          // The wrapped socket may not handle the underlying socket being closed by shutdown(). In
+          // particular, SSLSocket hangs future reads if the underlying socket is already closed at
+          // this point, even if you call sslSocket.close() later.
+          result.socket.close();
+          throw new SocketException("Socket close raced with handshake");
+        }
+        this.socket = result.socket;
+      }
       this.attributes = result.attributes;
 
       int maxQueuedControlFrames = 10000;
@@ -212,6 +227,10 @@ final class OkHttpServerTransport implements ServerTransport,
             OkHttpSettingsUtil.INITIAL_WINDOW_SIZE, config.flowControlWindow);
         OkHttpSettingsUtil.set(settings,
             OkHttpSettingsUtil.MAX_HEADER_LIST_SIZE, config.maxInboundMetadataSize);
+        if (config.maxConcurrentStreams != Integer.MAX_VALUE) {
+          OkHttpSettingsUtil.set(settings,
+              OkHttpSettingsUtil.MAX_CONCURRENT_STREAMS, config.maxConcurrentStreams);
+        }
         frameWriter.settings(settings);
         if (config.flowControlWindow > Utils.DEFAULT_WINDOW_SIZE) {
           frameWriter.windowUpdate(
@@ -241,15 +260,15 @@ final class OkHttpServerTransport implements ServerTransport,
             TimeUnit.NANOSECONDS);
       }
 
-      transportExecutor.execute(
-          new FrameHandler(variant.newReader(Okio.buffer(Okio.source(socket)), false)));
+      transportExecutor.execute(new FrameHandler(
+          variant.newReader(Okio.buffer(Okio.source(socket)), false)));
     } catch (Error | IOException | RuntimeException ex) {
       synchronized (lock) {
         if (!handshakeShutdown) {
           log.log(Level.INFO, "Socket failed to handshake", ex);
         }
       }
-      GrpcUtil.closeQuietly(bareSocket);
+      GrpcUtil.closeQuietly(socket);
       terminated();
     }
   }
@@ -268,7 +287,7 @@ final class OkHttpServerTransport implements ServerTransport,
       this.gracefulShutdownPeriod = gracefulShutdownPeriod;
       if (frameWriter == null) {
         handshakeShutdown = true;
-        GrpcUtil.closeQuietly(bareSocket);
+        GrpcUtil.closeQuietly(socket);
       } else {
         // RFC7540 §6.8. Begin double-GOAWAY graceful shutdown. To wait one RTT we use a PING, but
         // we also set a timer to limit the upper bound in case the PING is excessively stalled or
@@ -309,7 +328,7 @@ final class OkHttpServerTransport implements ServerTransport,
     synchronized (lock) {
       if (frameWriter == null) {
         handshakeShutdown = true;
-        GrpcUtil.closeQuietly(bareSocket);
+        GrpcUtil.closeQuietly(socket);
         return;
       }
     }
@@ -360,7 +379,7 @@ final class OkHttpServerTransport implements ServerTransport,
 
   private void triggerForcefulClose() {
     // Safe to do unconditionally; no need to check if timer cancellation raced
-    GrpcUtil.closeQuietly(bareSocket);
+    GrpcUtil.closeQuietly(socket);
   }
 
   private void terminated() {
@@ -396,9 +415,9 @@ final class OkHttpServerTransport implements ServerTransport,
     synchronized (lock) {
       return Futures.immediateFuture(new InternalChannelz.SocketStats(
           tracer.getStats(),
-          bareSocket.getLocalSocketAddress(),
-          bareSocket.getRemoteSocketAddress(),
-          Utils.getSocketOptions(bareSocket),
+          socket.getLocalSocketAddress(),
+          socket.getRemoteSocketAddress(),
+          Utils.getSocketOptions(socket),
           securityInfo));
     }
   }
@@ -513,6 +532,7 @@ final class OkHttpServerTransport implements ServerTransport,
     final long permitKeepAliveTimeInNanos;
     final long maxConnectionAgeInNanos;
     final long maxConnectionAgeGraceInNanos;
+    final int maxConcurrentStreams;
 
     public Config(
         OkHttpServerBuilder builder,
@@ -537,6 +557,7 @@ final class OkHttpServerTransport implements ServerTransport,
       permitKeepAliveTimeInNanos = builder.permitKeepAliveTimeInNanos;
       maxConnectionAgeInNanos = builder.maxConnectionAgeInNanos;
       maxConnectionAgeGraceInNanos = builder.maxConnectionAgeGraceInNanos;
+      maxConcurrentStreams = builder.maxConcurrentCallsPerConnection;
     }
   }
 
@@ -593,12 +614,12 @@ final class OkHttpServerTransport implements ServerTransport,
       } finally {
         // Wait for the abrupt shutdown to be processed by AsyncSink and close the socket
         try {
-          GrpcUtil.exhaust(bareSocket.getInputStream());
+          GrpcUtil.exhaust(socket.getInputStream());
         } catch (IOException ex) {
           // Unable to wait, so just proceed to tear-down. The socket is probably already closed so
           // the GOAWAY can't be sent anyway.
         }
-        GrpcUtil.closeQuietly(bareSocket);
+        GrpcUtil.closeQuietly(socket);
         terminated();
         Thread.currentThread().setName(threadName);
       }
@@ -631,6 +652,11 @@ final class OkHttpServerTransport implements ServerTransport,
         newStream = streamId > lastStreamId;
         if (newStream) {
           lastStreamId = streamId;
+          if (config.maxConcurrentStreams <= streams.size()) {
+            streamError(streamId, ErrorCode.REFUSED_STREAM,
+                "Max concurrent stream reached. RFC7540 section 5.1.2");
+            return;
+          }
         }
       }
 
@@ -701,7 +727,7 @@ final class OkHttpServerTransport implements ServerTransport,
               return;
             }
             // Ignore the trailers, but still half-close the stream
-            stream.inboundDataReceived(new Buffer(), 0, true);
+            stream.inboundDataReceived(new Buffer(), 0, 0, true);
             return;
           }
         } else {
@@ -792,7 +818,7 @@ final class OkHttpServerTransport implements ServerTransport,
         listener.streamCreated(streamForApp, method, metadata);
         stream.onStreamAllocated();
         if (inFinished) {
-          stream.inboundDataReceived(new Buffer(), 0, inFinished);
+          stream.inboundDataReceived(new Buffer(), 0, 0, inFinished);
         }
       }
     }
@@ -812,7 +838,8 @@ final class OkHttpServerTransport implements ServerTransport,
      * Handle an HTTP2 DATA frame.
      */
     @Override
-    public void data(boolean inFinished, int streamId, BufferedSource in, int length)
+    public void data(boolean inFinished, int streamId, BufferedSource in, int length,
+                     int paddedLength)
         throws IOException {
       frameLogger.logData(
           OkHttpFrameLogger.Direction.INBOUND, streamId, in.getBuffer(), length, inFinished);
@@ -846,7 +873,7 @@ final class OkHttpServerTransport implements ServerTransport,
               "Received DATA for half-closed (remote) stream. RFC7540 section 5.1");
           return;
         }
-        if (stream.inboundWindowAvailable() < length) {
+        if (stream.inboundWindowAvailable() < paddedLength) {
           in.skip(length);
           streamError(streamId, ErrorCode.FLOW_CONTROL_ERROR,
               "Received DATA size exceeded window size. RFC7540 section 6.9");
@@ -854,11 +881,11 @@ final class OkHttpServerTransport implements ServerTransport,
         }
         Buffer buf = new Buffer();
         buf.write(in.getBuffer(), length);
-        stream.inboundDataReceived(buf, length, inFinished);
+        stream.inboundDataReceived(buf, length, paddedLength - length, inFinished);
       }
 
       // connection window update
-      connectionUnacknowledgedBytesRead += length;
+      connectionUnacknowledgedBytesRead += paddedLength;
       if (connectionUnacknowledgedBytesRead
           >= config.flowControlWindow * Utils.DEFAULT_WINDOW_UPDATE_RATIO) {
         synchronized (lock) {
@@ -1057,7 +1084,7 @@ final class OkHttpServerTransport implements ServerTransport,
         }
         streams.put(streamId, stream);
         if (inFinished) {
-          stream.inboundDataReceived(new Buffer(), 0, true);
+          stream.inboundDataReceived(new Buffer(), 0, 0, true);
         }
         frameWriter.headers(streamId, headers);
         outboundFlow.data(
@@ -1108,14 +1135,14 @@ final class OkHttpServerTransport implements ServerTransport,
       synchronized (lock) {
         goAwayStatus = Status.UNAVAILABLE
             .withDescription("Keepalive failed. Considering connection dead");
-        GrpcUtil.closeQuietly(bareSocket);
+        GrpcUtil.closeQuietly(socket);
       }
     }
   }
 
   interface StreamState {
     /** Must be holding 'lock' when calling. */
-    void inboundDataReceived(Buffer frame, int windowConsumed, boolean endOfStream);
+    void inboundDataReceived(Buffer frame, int dataLength, int paddingLength, boolean endOfStream);
 
     /** Must be holding 'lock' when calling. */
     boolean hasReceivedEndOfStream();
@@ -1152,12 +1179,12 @@ final class OkHttpServerTransport implements ServerTransport,
     @Override public void onSentBytes(int frameBytes) {}
 
     @Override public void inboundDataReceived(
-        Buffer frame, int windowConsumed, boolean endOfStream) {
+        Buffer frame, int dataLength, int paddingLength, boolean endOfStream) {
       synchronized (lock) {
         if (endOfStream) {
           receivedEndOfStream = true;
         }
-        window -= windowConsumed;
+        window -= dataLength + paddingLength;
         try {
           frame.skip(frame.size()); // Recycle segments
         } catch (IOException ex) {

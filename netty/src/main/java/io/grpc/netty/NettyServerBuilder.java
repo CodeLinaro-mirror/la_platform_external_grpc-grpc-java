@@ -30,11 +30,11 @@ import com.google.errorprone.annotations.CheckReturnValue;
 import com.google.errorprone.annotations.InlineMe;
 import io.grpc.Attributes;
 import io.grpc.ExperimentalApi;
+import io.grpc.ForwardingServerBuilder;
 import io.grpc.Internal;
 import io.grpc.ServerBuilder;
 import io.grpc.ServerCredentials;
 import io.grpc.ServerStreamTracer;
-import io.grpc.internal.AbstractServerImplBuilder;
 import io.grpc.internal.FixedObjectPool;
 import io.grpc.internal.GrpcUtil;
 import io.grpc.internal.InternalServer;
@@ -67,7 +67,7 @@ import javax.net.ssl.SSLException;
  */
 @ExperimentalApi("https://github.com/grpc/grpc-java/issues/1784")
 @CheckReturnValue
-public final class NettyServerBuilder extends AbstractServerImplBuilder<NettyServerBuilder> {
+public final class NettyServerBuilder extends ForwardingServerBuilder<NettyServerBuilder> {
 
   // 1MiB
   public static final int DEFAULT_FLOW_CONTROL_WINDOW = 1024 * 1024;
@@ -75,9 +75,8 @@ public final class NettyServerBuilder extends AbstractServerImplBuilder<NettySer
   static final long MAX_CONNECTION_IDLE_NANOS_DISABLED = Long.MAX_VALUE;
   static final long MAX_CONNECTION_AGE_NANOS_DISABLED = Long.MAX_VALUE;
   static final long MAX_CONNECTION_AGE_GRACE_NANOS_INFINITE = Long.MAX_VALUE;
+  static final int MAX_RST_COUNT_DISABLED = 0;
 
-  private static final long MIN_KEEPALIVE_TIME_NANO = TimeUnit.MILLISECONDS.toNanos(1L);
-  private static final long MIN_KEEPALIVE_TIMEOUT_NANO = TimeUnit.MICROSECONDS.toNanos(499L);
   private static final long MIN_MAX_CONNECTION_IDLE_NANO = TimeUnit.SECONDS.toNanos(1L);
   private static final long MIN_MAX_CONNECTION_AGE_NANO = TimeUnit.SECONDS.toNanos(1L);
   private static final long AS_LARGE_AS_INFINITE = TimeUnit.DAYS.toNanos(1000L);
@@ -106,6 +105,7 @@ public final class NettyServerBuilder extends AbstractServerImplBuilder<NettySer
   private int flowControlWindow = DEFAULT_FLOW_CONTROL_WINDOW;
   private int maxMessageSize = DEFAULT_MAX_MESSAGE_SIZE;
   private int maxHeaderListSize = GrpcUtil.DEFAULT_MAX_HEADER_LIST_SIZE;
+  private int softLimitHeaderListSize = GrpcUtil.DEFAULT_MAX_HEADER_LIST_SIZE;
   private long keepAliveTimeInNanos = DEFAULT_SERVER_KEEPALIVE_TIME_NANOS;
   private long keepAliveTimeoutInNanos = DEFAULT_SERVER_KEEPALIVE_TIMEOUT_NANOS;
   private long maxConnectionIdleInNanos = MAX_CONNECTION_IDLE_NANOS_DISABLED;
@@ -113,6 +113,8 @@ public final class NettyServerBuilder extends AbstractServerImplBuilder<NettySer
   private long maxConnectionAgeGraceInNanos = MAX_CONNECTION_AGE_GRACE_NANOS_INFINITE;
   private boolean permitKeepAliveWithoutCalls;
   private long permitKeepAliveTimeInNanos = TimeUnit.MINUTES.toNanos(5);
+  private int maxRstCount;
+  private long maxRstPeriodNanos;
   private Attributes eagAttributes = Attributes.EMPTY;
 
   /**
@@ -491,6 +493,39 @@ public final class NettyServerBuilder extends AbstractServerImplBuilder<NettySer
   public NettyServerBuilder maxInboundMetadataSize(int bytes) {
     checkArgument(bytes > 0, "maxInboundMetadataSize must be positive: %s", bytes);
     this.maxHeaderListSize = bytes;
+    // Clear the soft limit setting, by setting soft limit to maxInboundMetadataSize. The
+    // maxInboundMetadataSize will take precedence over soft limit check.
+    this.softLimitHeaderListSize = bytes;
+    return this;
+  }
+
+  /**
+   * Sets the size of metadata that clients are advised to not exceed. When a metadata with size
+   * larger than the soft limit is encountered there will be a probability the RPC will fail. The
+   * chance of failing increases as the metadata size approaches the hard limit.
+   * {@code Integer.MAX_VALUE} disables the enforcement. The default is implementation-dependent,
+   * but is not generally less than 8 KiB and may be unlimited.
+   *
+   * <p>This is cumulative size of the metadata. The precise calculation is
+   * implementation-dependent, but implementations are encouraged to follow the calculation used
+   * for
+   * <a href="http://httpwg.org/specs/rfc7540.html#rfc.section.6.5.2">HTTP/2's
+   * SETTINGS_MAX_HEADER_LIST_SIZE</a>. It sums the bytes from each entry's key and value, plus 32
+   * bytes of overhead per entry.
+   *
+   * @param soft the soft size limit of received metadata
+   * @param max the hard size limit of received metadata
+   * @return this
+   * @throws IllegalArgumentException if soft and/or max is non-positive, or max smaller than soft
+   * @since 1.68.0
+   */
+  @CanIgnoreReturnValue
+  public NettyServerBuilder maxInboundMetadataSize(int soft, int max) {
+    checkArgument(soft > 0, "softLimitHeaderListSize must be positive: %s", soft);
+    checkArgument(max > soft,
+        "maxInboundMetadataSize: %s must be greater than softLimitHeaderListSize: %s", max, soft);
+    this.softLimitHeaderListSize = soft;
+    this.maxHeaderListSize = max;
     return this;
   }
 
@@ -511,10 +546,6 @@ public final class NettyServerBuilder extends AbstractServerImplBuilder<NettySer
       // Bump keepalive time to infinite. This disables keep alive.
       keepAliveTimeInNanos = SERVER_KEEPALIVE_TIME_NANOS_DISABLED;
     }
-    if (keepAliveTimeInNanos < MIN_KEEPALIVE_TIME_NANO) {
-      // Bump keepalive time.
-      keepAliveTimeInNanos = MIN_KEEPALIVE_TIME_NANO;
-    }
     return this;
   }
 
@@ -532,10 +563,6 @@ public final class NettyServerBuilder extends AbstractServerImplBuilder<NettySer
     keepAliveTimeoutInNanos = timeUnit.toNanos(keepAliveTimeout);
     keepAliveTimeoutInNanos =
         KeepAliveManager.clampKeepAliveTimeoutInNanos(keepAliveTimeoutInNanos);
-    if (keepAliveTimeoutInNanos < MIN_KEEPALIVE_TIMEOUT_NANO) {
-      // Bump keepalive timeout.
-      keepAliveTimeoutInNanos = MIN_KEEPALIVE_TIMEOUT_NANO;
-    }
     return this;
   }
 
@@ -644,6 +671,33 @@ public final class NettyServerBuilder extends AbstractServerImplBuilder<NettySer
     return this;
   }
 
+  /**
+   * Limits the rate of incoming RST_STREAM frames per connection to maxRstStream per
+   * secondsPerWindow. When exceeded on a connection, the connection is closed. This can reduce the
+   * impact of an attacker continually resetting RPCs before they complete, when combined with TLS
+   * and {@link #maxConcurrentCallsPerConnection(int)}.
+   *
+   * <p>gRPC clients send RST_STREAM when they cancel RPCs, so some RST_STREAMs are normal and
+   * setting this too low can cause errors for legimitate clients.
+   *
+   * <p>By default there is no limit.
+   *
+   * @param maxRstStream the positive limit of RST_STREAM frames per connection per period, or
+   *     {@code Integer.MAX_VALUE} for unlimited
+   * @param secondsPerWindow the positive number of seconds per period
+   */
+  @CanIgnoreReturnValue
+  public NettyServerBuilder maxRstFramesPerWindow(int maxRstStream, int secondsPerWindow) {
+    checkArgument(maxRstStream > 0, "maxRstStream must be positive");
+    checkArgument(secondsPerWindow > 0, "secondsPerWindow must be positive");
+    if (maxRstStream == Integer.MAX_VALUE) {
+      maxRstStream = MAX_RST_COUNT_DISABLED;
+    }
+    this.maxRstCount = maxRstStream;
+    this.maxRstPeriodNanos = TimeUnit.SECONDS.toNanos(secondsPerWindow);
+    return this;
+  }
+
   /** Sets the EAG attributes available to protocol negotiators. Not for general use. */
   void eagAttributes(Attributes eagAttributes) {
     this.eagAttributes = checkNotNull(eagAttributes, "eagAttributes");
@@ -657,14 +711,33 @@ public final class NettyServerBuilder extends AbstractServerImplBuilder<NettySer
         this.serverImplBuilder.getExecutorPool());
 
     return new NettyServer(
-        listenAddresses, channelFactory, channelOptions, childChannelOptions,
-        bossEventLoopGroupPool, workerEventLoopGroupPool, forceHeapBuffer, negotiator,
-        streamTracerFactories, transportTracerFactory, maxConcurrentCallsPerConnection,
-        autoFlowControl, flowControlWindow, maxMessageSize, maxHeaderListSize,
-        keepAliveTimeInNanos, keepAliveTimeoutInNanos,
-        maxConnectionIdleInNanos, maxConnectionAgeInNanos,
-        maxConnectionAgeGraceInNanos, permitKeepAliveWithoutCalls, permitKeepAliveTimeInNanos,
-        eagAttributes, this.serverImplBuilder.getChannelz());
+        listenAddresses,
+        channelFactory,
+        channelOptions,
+        childChannelOptions,
+        bossEventLoopGroupPool,
+        workerEventLoopGroupPool,
+        forceHeapBuffer,
+        negotiator,
+        streamTracerFactories,
+        transportTracerFactory,
+        maxConcurrentCallsPerConnection,
+        autoFlowControl,
+        flowControlWindow,
+        maxMessageSize,
+        maxHeaderListSize,
+        softLimitHeaderListSize,
+        keepAliveTimeInNanos,
+        keepAliveTimeoutInNanos,
+        maxConnectionIdleInNanos,
+        maxConnectionAgeInNanos,
+        maxConnectionAgeGraceInNanos,
+        permitKeepAliveWithoutCalls,
+        permitKeepAliveTimeInNanos,
+        maxRstCount,
+        maxRstPeriodNanos,
+        eagAttributes,
+        this.serverImplBuilder.getChannelz());
   }
 
   @VisibleForTesting

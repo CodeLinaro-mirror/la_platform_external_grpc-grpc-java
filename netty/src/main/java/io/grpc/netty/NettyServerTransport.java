@@ -70,6 +70,7 @@ class NettyServerTransport implements ServerTransport {
   private final int flowControlWindow;
   private final int maxMessageSize;
   private final int maxHeaderListSize;
+  private final int softLimitHeaderListSize;
   private final long keepAliveTimeInNanos;
   private final long keepAliveTimeoutInNanos;
   private final long maxConnectionIdleInNanos;
@@ -77,6 +78,8 @@ class NettyServerTransport implements ServerTransport {
   private final long maxConnectionAgeGraceInNanos;
   private final boolean permitKeepAliveWithoutCalls;
   private final long permitKeepAliveTimeInNanos;
+  private final int maxRstCount;
+  private final long maxRstPeriodNanos;
   private final Attributes eagAttributes;
   private final List<? extends ServerStreamTracer.Factory> streamTracerFactories;
   private final TransportTracer transportTracer;
@@ -92,6 +95,7 @@ class NettyServerTransport implements ServerTransport {
       int flowControlWindow,
       int maxMessageSize,
       int maxHeaderListSize,
+      int softLimitHeaderListSize,
       long keepAliveTimeInNanos,
       long keepAliveTimeoutInNanos,
       long maxConnectionIdleInNanos,
@@ -99,6 +103,8 @@ class NettyServerTransport implements ServerTransport {
       long maxConnectionAgeGraceInNanos,
       boolean permitKeepAliveWithoutCalls,
       long permitKeepAliveTimeInNanos,
+      int maxRstCount,
+      long maxRstPeriodNanos,
       Attributes eagAttributes) {
     this.channel = Preconditions.checkNotNull(channel, "channel");
     this.channelUnused = channelUnused;
@@ -111,6 +117,7 @@ class NettyServerTransport implements ServerTransport {
     this.flowControlWindow = flowControlWindow;
     this.maxMessageSize = maxMessageSize;
     this.maxHeaderListSize = maxHeaderListSize;
+    this.softLimitHeaderListSize = softLimitHeaderListSize;
     this.keepAliveTimeInNanos = keepAliveTimeInNanos;
     this.keepAliveTimeoutInNanos = keepAliveTimeoutInNanos;
     this.maxConnectionIdleInNanos = maxConnectionIdleInNanos;
@@ -118,6 +125,8 @@ class NettyServerTransport implements ServerTransport {
     this.maxConnectionAgeGraceInNanos = maxConnectionAgeGraceInNanos;
     this.permitKeepAliveWithoutCalls = permitKeepAliveWithoutCalls;
     this.permitKeepAliveTimeInNanos = permitKeepAliveTimeInNanos;
+    this.maxRstCount = maxRstCount;
+    this.maxRstPeriodNanos = maxRstPeriodNanos;
     this.eagAttributes = Preconditions.checkNotNull(eagAttributes, "eagAttributes");
     SocketAddress remote = channel.remoteAddress();
     this.logId = InternalLogId.allocate(getClass(), remote != null ? remote.toString() : null);
@@ -269,6 +278,7 @@ class NettyServerTransport implements ServerTransport {
         autoFlowControl,
         flowControlWindow,
         maxHeaderListSize,
+        softLimitHeaderListSize,
         maxMessageSize,
         keepAliveTimeInNanos,
         keepAliveTimeoutInNanos,
@@ -277,6 +287,8 @@ class NettyServerTransport implements ServerTransport {
         maxConnectionAgeGraceInNanos,
         permitKeepAliveWithoutCalls,
         permitKeepAliveTimeInNanos,
+        maxRstCount,
+        maxRstPeriodNanos,
         eagAttributes);
   }
 }

@@ -23,6 +23,7 @@ import static org.mockito.Mockito.mock;
 import com.google.common.collect.ImmutableMap;
 import io.grpc.ChannelLogger;
 import io.grpc.InternalServiceProviders;
+import io.grpc.MetricRecorder;
 import io.grpc.NameResolver;
 import io.grpc.NameResolver.ServiceConfigParser;
 import io.grpc.NameResolverProvider;
@@ -57,6 +58,7 @@ public class XdsNameResolverProviderTest {
       .setServiceConfigParser(mock(ServiceConfigParser.class))
       .setScheduledExecutorService(fakeClock.getScheduledExecutorService())
       .setChannelLogger(mock(ChannelLogger.class))
+      .setMetricRecorder(mock(MetricRecorder.class))
       .build();
 
   private XdsNameResolverProvider provider = new XdsNameResolverProvider();
@@ -110,14 +112,19 @@ public class XdsNameResolverProviderTest {
   }
 
   @Test
-  public void invalidName_hostnameContainsUnderscore() {
-    URI uri = URI.create("xds:///foo_bar.googleapis.com");
-    try {
-      provider.newNameResolver(uri, args);
-      fail("Expected IllegalArgumentException");
-    } catch (IllegalArgumentException e) {
-      // Expected
-    }
+  public void validName_urlExtractedAuthorityInvalidWithoutEncoding() {
+    XdsNameResolver resolver = 
+        provider.newNameResolver(URI.create("xds:///1234/path/foo.googleapis.com:8080"), args);
+    assertThat(resolver).isNotNull();
+    assertThat(resolver.getServiceAuthority()).isEqualTo("1234%2Fpath%2Ffoo.googleapis.com:8080");
+  }
+
+  @Test
+  public void validName_urlwithTargetAuthorityAndExtractedAuthorityInvalidWithoutEncoding() {
+    XdsNameResolver resolver = provider.newNameResolver(URI.create(
+        "xds://trafficdirector.google.com/1234/path/foo.googleapis.com:8080"), args);
+    assertThat(resolver).isNotNull();
+    assertThat(resolver.getServiceAuthority()).isEqualTo("1234%2Fpath%2Ffoo.googleapis.com:8080");
   }
 
   @Test

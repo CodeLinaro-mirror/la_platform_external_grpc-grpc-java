@@ -115,6 +115,44 @@ public abstract class LoadBalancer {
   @NameResolver.ResolutionResultAttr
   public static final Attributes.Key<Map<String, ?>> ATTR_HEALTH_CHECKING_CONFIG =
       Attributes.Key.create("internal:health-checking-config");
+
+  @Internal
+  public static final LoadBalancer.CreateSubchannelArgs.Key<LoadBalancer.SubchannelStateListener>
+      HEALTH_CONSUMER_LISTENER_ARG_KEY =
+      LoadBalancer.CreateSubchannelArgs.Key.create("internal:health-check-consumer-listener");
+
+  @Internal
+  public static final LoadBalancer.CreateSubchannelArgs.Key<Boolean>
+      DISABLE_SUBCHANNEL_RECONNECT_KEY =
+      LoadBalancer.CreateSubchannelArgs.Key.createWithDefault(
+          "internal:disable-subchannel-reconnect", Boolean.FALSE);
+
+  @Internal
+  public static final Attributes.Key<Boolean>
+      HAS_HEALTH_PRODUCER_LISTENER_KEY =
+      Attributes.Key.create("internal:has-health-check-producer-listener");
+
+  public static final Attributes.Key<Boolean> IS_PETIOLE_POLICY =
+      Attributes.Key.create("io.grpc.IS_PETIOLE_POLICY");
+
+  /**
+   * A picker that always returns an erring pick.
+   *
+   * @deprecated Use {@code new FixedResultPicker(PickResult.withNoResult())} instead.
+   */
+  @Deprecated
+  public static final SubchannelPicker EMPTY_PICKER = new SubchannelPicker() {
+    @Override
+    public PickResult pickSubchannel(PickSubchannelArgs args) {
+      return PickResult.withNoResult();
+    }
+
+    @Override
+    public String toString() {
+      return "EMPTY_PICKER";
+    }
+  };
+
   private int recursionCount;
 
   /**
@@ -149,20 +187,21 @@ public abstract class LoadBalancer {
    * @return {@code true} if the resolved addresses were accepted. {@code false} if rejected.
    * @since 1.49.0
    */
-  public boolean acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
+  public Status acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
     if (resolvedAddresses.getAddresses().isEmpty()
         && !canHandleEmptyAddressListFromNameResolution()) {
-      handleNameResolutionError(Status.UNAVAILABLE.withDescription(
-          "NameResolver returned no usable address. addrs=" + resolvedAddresses.getAddresses()
-              + ", attrs=" + resolvedAddresses.getAttributes()));
-      return false;
+      Status unavailableStatus = Status.UNAVAILABLE.withDescription(
+              "NameResolver returned no usable address. addrs=" + resolvedAddresses.getAddresses()
+                      + ", attrs=" + resolvedAddresses.getAttributes());
+      handleNameResolutionError(unavailableStatus);
+      return unavailableStatus;
     } else {
       if (recursionCount++ == 0) {
         handleResolvedAddresses(resolvedAddresses);
       }
       recursionCount = 0;
 
-      return true;
+      return Status.OK;
     }
   }
 
@@ -173,7 +212,7 @@ public abstract class LoadBalancer {
    *
    * @since 1.21.0
    */
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/1771")
+  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/11657")
   public static final class ResolvedAddresses {
     private final List<EquivalentAddressGroup> addresses;
     @NameResolver.ResolutionResultAttr
@@ -457,6 +496,29 @@ public abstract class LoadBalancer {
      * @since 1.2.0
      */
     public abstract MethodDescriptor<?, ?> getMethodDescriptor();
+
+    /**
+     * Gets an object that can be informed about what sort of pick was made.
+     */
+    @Internal
+    public PickDetailsConsumer getPickDetailsConsumer() {
+      return new PickDetailsConsumer() {};
+    }
+  }
+
+  /** Receives information about the pick being chosen. */
+  @Internal
+  public interface PickDetailsConsumer {
+    /**
+     * Optional labels that provide context of how the pick was routed. Particularly helpful for
+     * per-RPC metrics.
+     *
+     * @throws NullPointerException if key or value is {@code null}
+     */
+    default void addOptionalLabel(String key, String value) {
+      checkNotNull(key, "key");
+      checkNotNull(value, "value");
+    }
   }
 
   /**
@@ -490,6 +552,7 @@ public abstract class LoadBalancer {
     private final Status status;
     // True if the result is created by withDrop()
     private final boolean drop;
+    @Nullable private final String authorityOverride;
 
     private PickResult(
         @Nullable Subchannel subchannel, @Nullable ClientStreamTracer.Factory streamTracerFactory,
@@ -498,6 +561,17 @@ public abstract class LoadBalancer {
       this.streamTracerFactory = streamTracerFactory;
       this.status = checkNotNull(status, "status");
       this.drop = drop;
+      this.authorityOverride = null;
+    }
+
+    private PickResult(
+        @Nullable Subchannel subchannel, @Nullable ClientStreamTracer.Factory streamTracerFactory,
+        Status status, boolean drop, @Nullable String authorityOverride) {
+      this.subchannel = subchannel;
+      this.streamTracerFactory = streamTracerFactory;
+      this.status = checkNotNull(status, "status");
+      this.drop = drop;
+      this.authorityOverride = authorityOverride;
     }
 
     /**
@@ -578,6 +652,19 @@ public abstract class LoadBalancer {
     }
 
     /**
+     * Same as {@code withSubchannel(subchannel, streamTracerFactory)} but with an authority name
+     * to override in the host header.
+     */
+    @ExperimentalApi("https://github.com/grpc/grpc-java/issues/11656")
+    public static PickResult withSubchannel(
+        Subchannel subchannel, @Nullable ClientStreamTracer.Factory streamTracerFactory,
+        @Nullable String authorityOverride) {
+      return new PickResult(
+          checkNotNull(subchannel, "subchannel"), streamTracerFactory, Status.OK,
+          false, authorityOverride);
+    }
+
+    /**
      * Equivalent to {@code withSubchannel(subchannel, null)}.
      *
      * @since 1.2.0
@@ -620,6 +707,13 @@ public abstract class LoadBalancer {
       return NO_RESULT;
     }
 
+    /** Returns the authority override if any. */
+    @ExperimentalApi("https://github.com/grpc/grpc-java/issues/11656")
+    @Nullable
+    public String getAuthorityOverride() {
+      return authorityOverride;
+    }
+
     /**
      * The Subchannel if this result was created by {@link #withSubchannel withSubchannel()}, or
      * null otherwise.
@@ -660,6 +754,13 @@ public abstract class LoadBalancer {
       return drop;
     }
 
+    /**
+     * Returns {@code true} if the pick was not created with {@link #withNoResult()}.
+     */
+    public boolean hasResult() {
+      return !(subchannel == null && status.isOk());
+    }
+
     @Override
     public String toString() {
       return MoreObjects.toStringHelper(this)
@@ -667,6 +768,7 @@ public abstract class LoadBalancer {
           .add("streamTracerFactory", streamTracerFactory)
           .add("status", status)
           .add("drop", drop)
+          .add("authority-override", authorityOverride)
           .toString();
     }
 
@@ -922,6 +1024,8 @@ public abstract class LoadBalancer {
      *
      * <p>It must be called from {@link #getSynchronizationContext the Synchronization Context}
      *
+     * @return Must return a valid Subchannel object, may not return null.
+     *
      * @since 1.22.0
      */
     public Subchannel createSubchannel(CreateSubchannelArgs args) {
@@ -929,8 +1033,8 @@ public abstract class LoadBalancer {
     }
 
     /**
-     * Out-of-band channel for LoadBalancer’s own RPC needs, e.g., talking to an external
-     * load-balancer service.
+     * Create an out-of-band channel for the LoadBalancer’s own RPC needs, e.g., talking to an
+     * external load-balancer service.
      *
      * <p>The LoadBalancer is responsible for closing unused OOB channels, and closing all OOB
      * channels within {@link #shutdown}.
@@ -940,7 +1044,12 @@ public abstract class LoadBalancer {
     public abstract ManagedChannel createOobChannel(EquivalentAddressGroup eag, String authority);
 
     /**
-     * Accept a list of EAG for multiple authorities: https://github.com/grpc/grpc-java/issues/4618
+     * Create an out-of-band channel for the LoadBalancer's own RPC needs, e.g., talking to an
+     * external load-balancer service. This version of the method allows multiple EAGs, so different
+     * addresses can have different authorities.
+     *
+     * <p>The LoadBalancer is responsible for closing unused OOB channels, and closing all OOB
+     * channels within {@link #shutdown}.
      * */
     public ManagedChannel createOobChannel(List<EquivalentAddressGroup> eag,
         String authority) {
@@ -1128,6 +1237,13 @@ public abstract class LoadBalancer {
     public abstract String getAuthority();
 
     /**
+     * Returns the target string of the channel, guaranteed to include its scheme.
+     */
+    public String getChannelTarget() {
+      throw new UnsupportedOperationException();
+    }
+
+    /**
      * Returns the ChannelCredentials used to construct the channel, without bearer tokens.
      *
      * @since 1.35.0
@@ -1176,6 +1292,16 @@ public abstract class LoadBalancer {
      */
     public NameResolverRegistry getNameResolverRegistry() {
       throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Returns the {@link MetricRecorder} that the channel uses to record metrics.
+     *
+     * @since 1.64.0
+     */
+    @Internal
+    public MetricRecorder getMetricRecorder() {
+      return new MetricRecorder() {};
     }
   }
 
@@ -1254,7 +1380,8 @@ public abstract class LoadBalancer {
      */
     public final EquivalentAddressGroup getAddresses() {
       List<EquivalentAddressGroup> groups = getAllAddresses();
-      Preconditions.checkState(groups.size() == 1, "%s does not have exactly one group", groups);
+      Preconditions.checkState(groups != null && groups.size() == 1,
+          "%s does not have exactly one group", groups);
       return groups.get(0);
     }
 
@@ -1345,6 +1472,18 @@ public abstract class LoadBalancer {
     public Object getInternalSubchannel() {
       throw new UnsupportedOperationException();
     }
+
+    /**
+     * (Internal use only) returns attributes of the address subchannel is connected to.
+     *
+     * <p>Warning: this is INTERNAL API, is not supposed to be used by external users, and may
+     * change without notice. If you think you must use it, please file an issue and we can consider
+     * removing its "internal" status.
+     */
+    @Internal
+    public Attributes getConnectedAddressAttributes() {
+      throw new UnsupportedOperationException();
+    }
   }
 
   /**
@@ -1397,5 +1536,65 @@ public abstract class LoadBalancer {
      * @since 1.2.0
      */
     public abstract LoadBalancer newLoadBalancer(Helper helper);
+  }
+
+  /**
+   * A picker that always returns an erring pick.
+   *
+   * @deprecated Use {@code new FixedResultPicker(PickResult.withError(error))} instead.
+   */
+  @Deprecated
+  public static final class ErrorPicker extends SubchannelPicker {
+
+    private final Status error;
+
+    public ErrorPicker(Status error) {
+      this.error = checkNotNull(error, "error");
+    }
+
+    @Override
+    public PickResult pickSubchannel(PickSubchannelArgs args) {
+      return PickResult.withError(error);
+    }
+
+    @Override
+    public String toString() {
+      return MoreObjects.toStringHelper(this)
+          .add("error", error)
+          .toString();
+    }
+  }
+
+  /** A picker that always returns the same result. */
+  public static final class FixedResultPicker extends SubchannelPicker {
+    private final PickResult result;
+
+    public FixedResultPicker(PickResult result) {
+      this.result = Preconditions.checkNotNull(result, "result");
+    }
+
+    @Override
+    public PickResult pickSubchannel(PickSubchannelArgs args) {
+      return result;
+    }
+
+    @Override
+    public String toString() {
+      return "FixedResultPicker(" + result + ")";
+    }
+
+    @Override
+    public int hashCode() {
+      return result.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (!(o instanceof FixedResultPicker)) {
+        return false;
+      }
+      FixedResultPicker that = (FixedResultPicker) o;
+      return this.result.equals(that.result);
+    }
   }
 }

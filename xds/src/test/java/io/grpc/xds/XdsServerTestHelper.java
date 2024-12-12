@@ -22,8 +22,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.SettableFuture;
 import io.grpc.InsecureChannelCredentials;
+import io.grpc.MetricRecorder;
 import io.grpc.internal.ObjectPool;
-import io.grpc.xds.Bootstrapper.BootstrapInfo;
 import io.grpc.xds.EnvoyServerProtoData.ConnectionSourceType;
 import io.grpc.xds.EnvoyServerProtoData.FilterChain;
 import io.grpc.xds.EnvoyServerProtoData.Listener;
@@ -32,6 +32,12 @@ import io.grpc.xds.Filter.NamedFilterConfig;
 import io.grpc.xds.VirtualHost.Route;
 import io.grpc.xds.XdsListenerResource.LdsUpdate;
 import io.grpc.xds.XdsRouteConfigureResource.RdsUpdate;
+import io.grpc.xds.client.Bootstrapper;
+import io.grpc.xds.client.Bootstrapper.BootstrapInfo;
+import io.grpc.xds.client.EnvoyProtoData;
+import io.grpc.xds.client.XdsClient;
+import io.grpc.xds.client.XdsInitializationException;
+import io.grpc.xds.client.XdsResourceType;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -39,6 +45,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import javax.annotation.Nullable;
 
 /**
@@ -124,7 +131,7 @@ public class XdsServerTestHelper {
   }
 
   static final class FakeXdsClientPoolFactory
-        implements XdsNameResolverProvider.XdsClientPoolFactory {
+        implements XdsClientPoolFactory {
 
     private XdsClient xdsClient;
     Map<String, ?> savedBootstrap;
@@ -140,12 +147,13 @@ public class XdsServerTestHelper {
 
     @Override
     @Nullable
-    public ObjectPool<XdsClient> get() {
+    public ObjectPool<XdsClient> get(String target) {
       throw new UnsupportedOperationException("Should not be called");
     }
 
     @Override
-    public ObjectPool<XdsClient> getOrCreate() throws XdsInitializationException {
+    public ObjectPool<XdsClient> getOrCreate(String target, MetricRecorder metricRecorder)
+        throws XdsInitializationException {
       return new ObjectPool<XdsClient>() {
         @Override
         public XdsClient getObject() {
@@ -159,6 +167,11 @@ public class XdsServerTestHelper {
         }
       };
     }
+
+    @Override
+    public List<String> getTargets() {
+      return Collections.singletonList("fake-target");
+    }
   }
 
   static final class FakeXdsClient extends XdsClient {
@@ -169,7 +182,7 @@ public class XdsServerTestHelper {
     final Map<String, ResourceWatcher<RdsUpdate>> rdsWatchers = new HashMap<>();
 
     @Override
-    public TlsContextManager getTlsContextManager() {
+    public TlsContextManager getSecurityConfig() {
       return null;
     }
 
@@ -180,9 +193,10 @@ public class XdsServerTestHelper {
 
     @Override
     @SuppressWarnings("unchecked")
-    <T extends ResourceUpdate> void watchXdsResource(XdsResourceType<T> resourceType,
-                                                     String resourceName,
-                                                     ResourceWatcher<T> watcher) {
+    public <T extends ResourceUpdate> void watchXdsResource(XdsResourceType<T> resourceType,
+                                                            String resourceName,
+                                                            ResourceWatcher<T> watcher,
+                                                            Executor syncContext) {
       switch (resourceType.typeName()) {
         case "LDS":
           assertThat(ldsWatcher).isNull();
@@ -199,9 +213,9 @@ public class XdsServerTestHelper {
     }
 
     @Override
-    <T extends ResourceUpdate> void cancelXdsResourceWatch(XdsResourceType<T> type,
-                                                           String resourceName,
-                                ResourceWatcher<T> watcher) {
+    public <T extends ResourceUpdate> void cancelXdsResourceWatch(XdsResourceType<T> type,
+        String resourceName,
+        ResourceWatcher<T> watcher) {
       switch (type.typeName()) {
         case "LDS":
           assertThat(ldsWatcher).isNotNull();
@@ -216,12 +230,12 @@ public class XdsServerTestHelper {
     }
 
     @Override
-    void shutdown() {
+    public void shutdown() {
       shutdown = true;
     }
 
     @Override
-    boolean isShutDown() {
+    public boolean isShutDown() {
       return shutdown;
     }
 

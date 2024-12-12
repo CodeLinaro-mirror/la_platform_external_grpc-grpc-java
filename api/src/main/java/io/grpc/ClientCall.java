@@ -67,7 +67,7 @@ import javax.annotation.Nullable;
  * manner, and notifies gRPC library to receive additional response after one is consumed by
  * a fictional <code>processResponse()</code>.
  *
- * <p><pre>
+ * <pre>
  *   call = channel.newCall(bidiStreamingMethod, callOptions);
  *   listener = new ClientCall.Listener&lt;FooResponse&gt;() {
  *     &#64;Override
@@ -270,7 +270,6 @@ public abstract class ClientCall<ReqT, RespT> {
    * encoding has been negotiated, this is a no-op. By default per-message compression is enabled,
    * but may not have any effect if compression is not enabled on the call.
    */
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/1703")
   public void setMessageCompression(boolean enabled) {
     // noop
   }

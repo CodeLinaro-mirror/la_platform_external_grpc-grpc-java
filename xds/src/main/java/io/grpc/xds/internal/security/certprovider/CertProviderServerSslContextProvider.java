@@ -22,8 +22,8 @@ import io.envoyproxy.envoy.config.core.v3.Node;
 import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.CertificateValidationContext;
 import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.CommonTlsContext;
 import io.grpc.netty.GrpcSslContexts;
-import io.grpc.xds.Bootstrapper.CertificateProviderInfo;
 import io.grpc.xds.EnvoyServerProtoData.DownstreamTlsContext;
+import io.grpc.xds.client.Bootstrapper.CertificateProviderInfo;
 import io.grpc.xds.internal.security.trust.XdsTrustManagerFactory;
 import io.netty.handler.ssl.SslContextBuilder;
 import java.io.IOException;
@@ -59,13 +59,17 @@ final class CertProviderServerSslContextProvider extends CertProviderSslContextP
       CertificateValidationContext certificateValidationContextdationContext)
       throws CertStoreException, CertificateException, IOException {
     SslContextBuilder sslContextBuilder = SslContextBuilder.forServer(savedKey, savedCertChain);
-    setClientAuthValues(
-        sslContextBuilder,
-        isMtls()
-            ? new XdsTrustManagerFactory(
-                savedTrustedRoots.toArray(new X509Certificate[0]),
-                certificateValidationContextdationContext)
-            : null);
+    XdsTrustManagerFactory trustManagerFactory = null;
+    if (isMtls() && savedSpiffeTrustMap != null) {
+      trustManagerFactory = new XdsTrustManagerFactory(
+          savedSpiffeTrustMap,
+          certificateValidationContextdationContext);
+    } else if (isMtls()) {
+      trustManagerFactory = new XdsTrustManagerFactory(
+          savedTrustedRoots.toArray(new X509Certificate[0]),
+          certificateValidationContextdationContext);
+    }
+    setClientAuthValues(sslContextBuilder, trustManagerFactory);
     sslContextBuilder = GrpcSslContexts.configure(sslContextBuilder);
     return sslContextBuilder;
   }

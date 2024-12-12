@@ -16,8 +16,8 @@
 
 package io.grpc.xds.internal.rbac.engine;
 
-import static com.google.common.base.Charsets.US_ASCII;
 import static com.google.common.truth.Truth.assertThat;
+import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -51,13 +51,13 @@ import io.grpc.xds.internal.rbac.engine.GrpcAuthorizationEngine.PolicyMatcher;
 import io.grpc.xds.internal.rbac.engine.GrpcAuthorizationEngine.SourceIpMatcher;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.security.Principal;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLSession;
+import javax.security.auth.x500.X500Principal;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -279,7 +279,7 @@ public class GrpcAuthorizationEngineTest {
     X509Certificate mockCert = mock(X509Certificate.class);
     when(sslSession.getPeerCertificates()).thenReturn(new X509Certificate[]{mockCert});
     assertThat(engine.evaluate(HEADER, serverCall).decision()).isEqualTo(Action.DENY);
-    when(mockCert.getSubjectDN()).thenReturn(mock(Principal.class));
+    when(mockCert.getSubjectX500Principal()).thenReturn(new X500Principal(""));
     assertThat(engine.evaluate(HEADER, serverCall).decision()).isEqualTo(Action.DENY);
     when(mockCert.getSubjectAlternativeNames()).thenReturn(Arrays.<List<?>>asList(
         Arrays.asList(2, "*.test.google.fr")));

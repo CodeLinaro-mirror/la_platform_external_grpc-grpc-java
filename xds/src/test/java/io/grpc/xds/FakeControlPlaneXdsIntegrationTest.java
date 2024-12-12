@@ -18,16 +18,24 @@
 package io.grpc.xds;
 
 import static com.google.common.truth.Truth.assertThat;
+import static io.grpc.xds.DataPlaneRule.ENDPOINT_HOST_NAME;
 import static org.junit.Assert.assertEquals;
 
 import com.github.xds.type.v3.TypedStruct;
 import com.google.protobuf.Any;
 import com.google.protobuf.Struct;
 import com.google.protobuf.Value;
+import io.envoyproxy.envoy.config.cluster.v3.Cluster;
 import io.envoyproxy.envoy.config.cluster.v3.Cluster.LbPolicy;
 import io.envoyproxy.envoy.config.cluster.v3.LoadBalancingPolicy;
 import io.envoyproxy.envoy.config.cluster.v3.LoadBalancingPolicy.Policy;
+import io.envoyproxy.envoy.config.core.v3.Address;
+import io.envoyproxy.envoy.config.core.v3.SocketAddress;
 import io.envoyproxy.envoy.config.core.v3.TypedExtensionConfig;
+import io.envoyproxy.envoy.config.endpoint.v3.ClusterLoadAssignment;
+import io.envoyproxy.envoy.config.endpoint.v3.Endpoint;
+import io.envoyproxy.envoy.config.endpoint.v3.LbEndpoint;
+import io.envoyproxy.envoy.config.endpoint.v3.LocalityLbEndpoints;
 import io.envoyproxy.envoy.extensions.load_balancing_policies.wrr_locality.v3.WrrLocality;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
@@ -42,9 +50,9 @@ import io.grpc.MethodDescriptor;
 import io.grpc.testing.protobuf.SimpleRequest;
 import io.grpc.testing.protobuf.SimpleResponse;
 import io.grpc.testing.protobuf.SimpleServiceGrpc;
+import java.net.InetSocketAddress;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
@@ -71,18 +79,10 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class FakeControlPlaneXdsIntegrationTest {
 
-  public ControlPlaneRule controlPlane;
-  public DataPlaneRule dataPlane;
-
-  /**
-   * The {@link ControlPlaneRule} should run before the {@link DataPlaneRule}.
-   */
-  @Rule
-  public RuleChain ruleChain() {
-    controlPlane = new ControlPlaneRule();
-    dataPlane = new DataPlaneRule(controlPlane);
-    return RuleChain.outerRule(controlPlane).around(dataPlane);
-  }
+  @Rule(order = 0)
+  public ControlPlaneRule controlPlane = new ControlPlaneRule();
+  @Rule(order = 1)
+  public DataPlaneRule dataPlane = new DataPlaneRule(controlPlane);
 
   @Test
   public void pingPong() throws Exception {
@@ -92,9 +92,27 @@ public class FakeControlPlaneXdsIntegrationTest {
     SimpleRequest request = SimpleRequest.newBuilder()
         .build();
     SimpleResponse goldenResponse = SimpleResponse.newBuilder()
-        .setResponseMessage("Hi, xDS!")
+        .setResponseMessage("Hi, xDS! Authority= test-server")
         .build();
     assertEquals(goldenResponse, blockingStub.unaryRpc(request));
+  }
+
+  @Test
+  public void pingPong_edsEndpoint_authorityOverride() throws Exception {
+    System.setProperty("GRPC_EXPERIMENTAL_XDS_AUTHORITY_REWRITE", "true");
+    try {
+      ManagedChannel channel = dataPlane.getManagedChannel();
+      SimpleServiceGrpc.SimpleServiceBlockingStub blockingStub = SimpleServiceGrpc.newBlockingStub(
+          channel);
+      SimpleRequest request = SimpleRequest.newBuilder()
+          .build();
+      SimpleResponse goldenResponse = SimpleResponse.newBuilder()
+          .setResponseMessage("Hi, xDS! Authority= " + ENDPOINT_HOST_NAME)
+          .build();
+      assertEquals(goldenResponse, blockingStub.unaryRpc(request));
+    } finally {
+      System.clearProperty("GRPC_EXPERIMENTAL_XDS_AUTHORITY_REWRITE");
+    }
   }
 
   @Test
@@ -130,7 +148,7 @@ public class FakeControlPlaneXdsIntegrationTest {
       SimpleRequest request = SimpleRequest.newBuilder()
           .build();
       SimpleResponse goldenResponse = SimpleResponse.newBuilder()
-          .setResponseMessage("Hi, xDS!")
+          .setResponseMessage("Hi, xDS! Authority= test-server")
           .build();
       assertEquals(goldenResponse, blockingStub.unaryRpc(request));
 
@@ -184,8 +202,43 @@ public class FakeControlPlaneXdsIntegrationTest {
     SimpleRequest request = SimpleRequest.newBuilder()
         .build();
     SimpleResponse goldenResponse = SimpleResponse.newBuilder()
-        .setResponseMessage("Hi, xDS!")
+        .setResponseMessage("Hi, xDS! Authority= test-server")
         .build();
     assertEquals(goldenResponse, blockingStub.unaryRpc(request));
+  }
+
+  @Test
+  public void pingPong_logicalDns_authorityOverride() {
+    System.setProperty("GRPC_EXPERIMENTAL_XDS_AUTHORITY_REWRITE", "true");
+    try {
+      InetSocketAddress serverAddress =
+          (InetSocketAddress) dataPlane.getServer().getListenSockets().get(0);
+      controlPlane.setCdsConfig(
+          ControlPlaneRule.buildCluster().toBuilder()
+              .setType(Cluster.DiscoveryType.LOGICAL_DNS)
+              .setLoadAssignment(
+                  ClusterLoadAssignment.newBuilder().addEndpoints(
+                          LocalityLbEndpoints.newBuilder().addLbEndpoints(
+                              LbEndpoint.newBuilder().setEndpoint(
+                                  Endpoint.newBuilder().setAddress(
+                                      Address.newBuilder().setSocketAddress(
+                                          SocketAddress.newBuilder()
+                                              .setAddress("localhost")
+                                              .setPortValue(serverAddress.getPort()))))))
+                      .build())
+              .build());
+
+      ManagedChannel channel = dataPlane.getManagedChannel();
+      SimpleServiceGrpc.SimpleServiceBlockingStub blockingStub = SimpleServiceGrpc.newBlockingStub(
+          channel);
+      SimpleRequest request = SimpleRequest.newBuilder()
+          .build();
+      SimpleResponse goldenResponse = SimpleResponse.newBuilder()
+          .setResponseMessage("Hi, xDS! Authority= localhost:" + serverAddress.getPort())
+          .build();
+      assertEquals(goldenResponse, blockingStub.unaryRpc(request));
+    } finally {
+      System.clearProperty("GRPC_EXPERIMENTAL_XDS_AUTHORITY_REWRITE");
+    }
   }
 }

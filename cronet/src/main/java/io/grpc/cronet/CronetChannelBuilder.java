@@ -20,17 +20,19 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static io.grpc.internal.GrpcUtil.DEFAULT_MAX_MESSAGE_SIZE;
 
-import android.util.Log;
+import android.net.Network;
+import android.os.Build;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.errorprone.annotations.DoNotCall;
 import io.grpc.ChannelCredentials;
 import io.grpc.ChannelLogger;
 import io.grpc.ExperimentalApi;
+import io.grpc.ForwardingChannelBuilder2;
 import io.grpc.Internal;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.internal.AbstractManagedChannelImplBuilder;
 import io.grpc.internal.ClientTransportFactory;
 import io.grpc.internal.ConnectionClientTransport;
 import io.grpc.internal.GrpcUtil;
@@ -38,24 +40,19 @@ import io.grpc.internal.ManagedChannelImplBuilder;
 import io.grpc.internal.ManagedChannelImplBuilder.ClientTransportFactoryBuilder;
 import io.grpc.internal.SharedResourceHolder;
 import io.grpc.internal.TransportTracer;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import javax.annotation.Nullable;
 import org.chromium.net.BidirectionalStream;
 import org.chromium.net.CronetEngine;
-import org.chromium.net.ExperimentalBidirectionalStream;
-import org.chromium.net.ExperimentalCronetEngine;
 
 /** Convenience class for building channels with the cronet transport. */
 @ExperimentalApi("There is no plan to make this API stable, given transport API instability")
-public final class CronetChannelBuilder
-    extends AbstractManagedChannelImplBuilder<CronetChannelBuilder> {
-
-  private static final String LOG_TAG = "CronetChannelBuilder";
+public final class CronetChannelBuilder extends ForwardingChannelBuilder2<CronetChannelBuilder> {
 
   /** BidirectionalStream.Builder factory used for getting the gRPC BidirectionalStream. */
   public static abstract class StreamBuilderFactory {
@@ -90,7 +87,7 @@ public final class CronetChannelBuilder
 
   private final CronetEngine cronetEngine;
   private final ManagedChannelImplBuilder managedChannelImplBuilder;
-  private TransportTracer.Factory transportTracerFactory = TransportTracer.getDefaultFactory();
+  private final TransportTracer.Factory transportTracerFactory = TransportTracer.getDefaultFactory();
 
   private boolean alwaysUsePut = false;
 
@@ -111,6 +108,7 @@ public final class CronetChannelBuilder
   private int trafficStatsTag;
   private boolean trafficStatsUidSet;
   private int trafficStatsUid;
+  private Network network;
 
   private CronetChannelBuilder(String host, int port, CronetEngine cronetEngine) {
     final class CronetChannelTransportFactoryBuilder implements ClientTransportFactoryBuilder {
@@ -138,7 +136,7 @@ public final class CronetChannelBuilder
    * Sets the maximum message size allowed to be received on the channel. If not called,
    * defaults to {@link io.grpc.internal.GrpcUtil#DEFAULT_MAX_MESSAGE_SIZE}.
    */
-  public final CronetChannelBuilder maxMessageSize(int maxMessageSize) {
+  public CronetChannelBuilder maxMessageSize(int maxMessageSize) {
     checkArgument(maxMessageSize >= 0, "maxMessageSize must be >= 0");
     this.maxMessageSize = maxMessageSize;
     return this;
@@ -147,7 +145,7 @@ public final class CronetChannelBuilder
   /**
    * Sets the Cronet channel to always use PUT instead of POST. Defaults to false.
    */
-  public final CronetChannelBuilder alwaysUsePut(boolean enable) {
+  public CronetChannelBuilder alwaysUsePut(boolean enable) {
     this.alwaysUsePut = enable;
     return this;
   }
@@ -169,7 +167,7 @@ public final class CronetChannelBuilder
    *     application.
    * @return the builder to facilitate chaining.
    */
-  final CronetChannelBuilder setTrafficStatsTag(int tag) {
+  CronetChannelBuilder setTrafficStatsTag(int tag) {
     trafficStatsTagSet = true;
     trafficStatsTag = tag;
     return this;
@@ -179,7 +177,7 @@ public final class CronetChannelBuilder
    * Sets specific UID to use when accounting socket traffic caused by this channel. See {@link
    * android.net.TrafficStats} for more information. Designed for use when performing an operation
    * on behalf of another application. Caller must hold {@link
-   * android.Manifest.permission#MODIFY_NETWORK_ACCOUNTING} permission. By default traffic is
+   * android.Manifest.permission#UPDATE_DEVICE_STATS} permission. By default traffic is
    * attributed to UID of caller.
    *
    * <p><b>NOTE:</b>Setting a UID disallows sharing of sockets with channels with other UIDs, which
@@ -190,9 +188,16 @@ public final class CronetChannelBuilder
    * @param uid the UID to attribute socket traffic caused by this channel.
    * @return the builder to facilitate chaining.
    */
-  final CronetChannelBuilder setTrafficStatsUid(int uid) {
+  CronetChannelBuilder setTrafficStatsUid(int uid) {
     trafficStatsUidSet = true;
     trafficStatsUid = uid;
+    return this;
+  }
+
+  /** Sets the network ID to use for this channel traffic. */
+  @CanIgnoreReturnValue
+  CronetChannelBuilder bindToNetwork(@Nullable Network network) {
+    this.network = network;
     return this;
   }
 
@@ -206,7 +211,7 @@ public final class CronetChannelBuilder
    *
    * @since 1.12.0
    */
-  public final CronetChannelBuilder scheduledExecutorService(
+  public CronetChannelBuilder scheduledExecutorService(
       ScheduledExecutorService scheduledExecutorService) {
     this.scheduledExecutorService =
         checkNotNull(scheduledExecutorService, "scheduledExecutorService");
@@ -216,7 +221,12 @@ public final class CronetChannelBuilder
   ClientTransportFactory buildTransportFactory() {
     return new CronetTransportFactory(
         new TaggingStreamFactory(
-            cronetEngine, trafficStatsTagSet, trafficStatsTag, trafficStatsUidSet, trafficStatsUid),
+            cronetEngine,
+            trafficStatsTagSet,
+            trafficStatsTag,
+            trafficStatsUidSet,
+            trafficStatsUid,
+            network),
         MoreExecutors.directExecutor(),
         scheduledExecutorService,
         maxMessageSize,
@@ -284,107 +294,57 @@ public final class CronetChannelBuilder
         SharedResourceHolder.release(GrpcUtil.TIMER_SERVICE, timeoutService);
       }
     }
+
+    @Override
+    public Collection<Class<? extends SocketAddress>> getSupportedSocketAddressTypes() {
+      return Collections.singleton(InetSocketAddress.class);
+    }
   }
 
   /**
    * StreamBuilderFactory impl that applies TrafficStats tags to stream builders that are produced.
    */
   private static class TaggingStreamFactory extends StreamBuilderFactory {
-    private static volatile boolean loadSetTrafficStatsTagAttempted;
-    private static volatile boolean loadSetTrafficStatsUidAttempted;
-    private static volatile Method setTrafficStatsTagMethod;
-    private static volatile Method setTrafficStatsUidMethod;
-
     private final CronetEngine cronetEngine;
     private final boolean trafficStatsTagSet;
     private final int trafficStatsTag;
     private final boolean trafficStatsUidSet;
     private final int trafficStatsUid;
+    private final Network network;
 
     TaggingStreamFactory(
         CronetEngine cronetEngine,
         boolean trafficStatsTagSet,
         int trafficStatsTag,
         boolean trafficStatsUidSet,
-        int trafficStatsUid) {
+        int trafficStatsUid,
+        Network network) {
       this.cronetEngine = cronetEngine;
       this.trafficStatsTagSet = trafficStatsTagSet;
       this.trafficStatsTag = trafficStatsTag;
       this.trafficStatsUidSet = trafficStatsUidSet;
       this.trafficStatsUid = trafficStatsUid;
+      this.network = network;
     }
 
     @Override
     public BidirectionalStream.Builder newBidirectionalStreamBuilder(
         String url, BidirectionalStream.Callback callback, Executor executor) {
-      ExperimentalBidirectionalStream.Builder builder =
-          ((ExperimentalCronetEngine) cronetEngine)
+      BidirectionalStream.Builder builder =
+          cronetEngine
               .newBidirectionalStreamBuilder(url, callback, executor);
       if (trafficStatsTagSet) {
-        setTrafficStatsTag(builder, trafficStatsTag);
+        builder.setTrafficStatsTag(trafficStatsTag);
       }
       if (trafficStatsUidSet) {
-        setTrafficStatsUid(builder, trafficStatsUid);
+        builder.setTrafficStatsUid(trafficStatsUid);
+      }
+      if (network != null) {
+        if (Build.VERSION.SDK_INT >= 23) {
+          builder.bindToNetwork(network.getNetworkHandle());
+        }
       }
       return builder;
-    }
-
-    private static void setTrafficStatsTag(ExperimentalBidirectionalStream.Builder builder,
-        int tag) {
-      if (!loadSetTrafficStatsTagAttempted) {
-        synchronized (TaggingStreamFactory.class) {
-          if (!loadSetTrafficStatsTagAttempted) {
-            try {
-              setTrafficStatsTagMethod = ExperimentalBidirectionalStream.Builder.class
-                  .getMethod("setTrafficStatsTag", int.class);
-            } catch (NoSuchMethodException e) {
-              Log.w(LOG_TAG,
-                  "Failed to load method ExperimentalBidirectionalStream.Builder.setTrafficStatsTag",
-                  e);
-            } finally {
-              loadSetTrafficStatsTagAttempted = true;
-            }
-          }
-        }
-      }
-      if (setTrafficStatsTagMethod != null) {
-        try {
-          setTrafficStatsTagMethod.invoke(builder, tag);
-        } catch (InvocationTargetException e) {
-          throw new RuntimeException(e.getCause() == null ? e.getTargetException() : e.getCause());
-        } catch (IllegalAccessException e) {
-          Log.w(LOG_TAG, "Failed to set traffic stats tag: " + tag, e);
-        }
-      }
-    }
-
-    private static void setTrafficStatsUid(ExperimentalBidirectionalStream.Builder builder,
-        int uid) {
-      if (!loadSetTrafficStatsUidAttempted) {
-        synchronized (TaggingStreamFactory.class) {
-          if (!loadSetTrafficStatsUidAttempted) {
-            try {
-              setTrafficStatsUidMethod = ExperimentalBidirectionalStream.Builder.class
-                  .getMethod("setTrafficStatsUid", int.class);
-            } catch (NoSuchMethodException e) {
-              Log.w(LOG_TAG,
-                  "Failed to load method ExperimentalBidirectionalStream.Builder.setTrafficStatsUid",
-                  e);
-            } finally {
-              loadSetTrafficStatsUidAttempted = true;
-            }
-          }
-        }
-      }
-      if (setTrafficStatsUidMethod != null) {
-        try {
-          setTrafficStatsUidMethod.invoke(builder, uid);
-        } catch (InvocationTargetException e) {
-          throw new RuntimeException(e.getCause() == null ? e.getTargetException() : e.getCause());
-        } catch (IllegalAccessException e) {
-          Log.w(LOG_TAG, "Failed to set traffic stats uid: " + uid, e);
-        }
-      }
     }
   }
 }

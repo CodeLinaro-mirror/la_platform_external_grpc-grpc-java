@@ -7,16 +7,13 @@ import static io.grpc.MethodDescriptor.generateFullMethodName;
  * Test service that has been deprecated and should generate with Java's &#64;Deprecated annotation
  * </pre>
  */
-@javax.annotation.Generated(
-    value = "by gRPC proto compiler (version 1.56.1-SNAPSHOT)",
-    comments = "Source: grpc/testing/compiler/test.proto")
 @io.grpc.stub.annotations.GrpcGenerated
 @java.lang.Deprecated
 public final class TestDeprecatedServiceGrpc {
 
   private TestDeprecatedServiceGrpc() {}
 
-  public static final String SERVICE_NAME = "grpc.testing.compiler.TestDeprecatedService";
+  public static final java.lang.String SERVICE_NAME = "grpc.testing.compiler.TestDeprecatedService";
 
   // Static method descriptors that strictly reflect the proto.
   private static volatile io.grpc.MethodDescriptor<io.grpc.testing.compiler.Test.SimpleRequest,

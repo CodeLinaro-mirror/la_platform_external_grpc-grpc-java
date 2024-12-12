@@ -20,10 +20,10 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.Assert.assertTrue;
 
 import io.grpc.ChannelCredentials;
+import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.alts.ComputeEngineChannelCredentials;
-import io.grpc.netty.NettyChannelBuilder;
 import java.util.ArrayList;
 import java.util.logging.Logger;
 
@@ -74,6 +74,8 @@ public final class XdsFederationTestClient {
   private int soakPerIterationMaxAcceptableLatencyMs = 1000;
   private int soakOverallTimeoutSeconds = 10;
   private int soakMinTimeMsBetweenRpcs = 0;
+  private int soakRequestSize = 271828;
+  private int soakResponseSize = 314159;
   private String testCase = "rpc_soak";
   private final ArrayList<InnerClient> clients = new ArrayList<>();
 
@@ -121,6 +123,12 @@ public final class XdsFederationTestClient {
           break;
         case "soak_min_time_ms_between_rpcs":
           soakMinTimeMsBetweenRpcs = Integer.parseInt(value);
+          break;
+        case "soak_request_size":
+          soakRequestSize = Integer.parseInt(value);
+          break;
+        case "soak_response_size":
+          soakResponseSize = Integer.parseInt(value);
           break;
         default:
           System.err.println("Unknown argument: " + key);
@@ -175,6 +183,14 @@ public final class XdsFederationTestClient {
           + "\n      channel_soak: sends --soak_iterations RPCs, rebuilding the channel "
           + "each time."
           + "\n      Default: " + c.testCase
+          + "\n --soak_request_size "
+          + "\n                                        The request size in a soak RPC. Default "
+          + c.soakRequestSize
+          + "\n"
+          + " --soak_response_size \n"
+          + "                                          The response size in a soak RPC. Default"
+          + " "
+          + c.soakResponseSize
       );
       System.exit(1);
     }
@@ -229,27 +245,41 @@ public final class XdsFederationTestClient {
     /**
      * Run the intended soak test.
      */
-    public void run() {
-      boolean resetChannelPerIteration;
-      switch (testCase) {
-        case "rpc_soak":
-          resetChannelPerIteration = false;
-          break;
-        case "channel_soak":
-          resetChannelPerIteration = true;
-          break;
-        default:
-          throw new RuntimeException("invalid testcase: " + testCase);
-      }
+    public void run() throws InterruptedException {
       try {
-        performSoakTest(
-            serverUri,
-            resetChannelPerIteration,
-            soakIterations,
-            soakMaxFailures,
-            soakPerIterationMaxAcceptableLatencyMs,
-            soakMinTimeMsBetweenRpcs,
-            soakOverallTimeoutSeconds);
+        switch (testCase) {
+          case "rpc_soak": {
+            performSoakTest(
+                serverUri,
+                soakIterations,
+                soakMaxFailures,
+                soakPerIterationMaxAcceptableLatencyMs,
+                soakMinTimeMsBetweenRpcs,
+                soakOverallTimeoutSeconds,
+                soakRequestSize,
+                soakResponseSize,
+                1,
+                (currentChannel) -> currentChannel);
+          }
+              break;
+          case "channel_soak": {
+            performSoakTest(
+                serverUri,
+                soakIterations,
+                soakMaxFailures,
+                soakPerIterationMaxAcceptableLatencyMs,
+                soakMinTimeMsBetweenRpcs,
+                soakOverallTimeoutSeconds,
+                soakRequestSize,
+                soakResponseSize,
+                1,
+                (currentChannel) -> createNewChannel(currentChannel));
+          }
+            break;
+          default:
+            throw new RuntimeException("invalid testcase: " + testCase);
+        }
+
         logger.info("Test case: " + testCase + " done for server: " + serverUri);
         runSucceeded = true;
       } catch (Exception e) {
@@ -271,17 +301,24 @@ public final class XdsFederationTestClient {
         default:
           throw new IllegalArgumentException("Unknown custom credentials: " + credentialsType);
       }
-      return NettyChannelBuilder.forTarget(serverUri, channelCredentials)
+      return Grpc.newChannelBuilder(serverUri, channelCredentials)
           .keepAliveTime(3600, SECONDS)
           .keepAliveTimeout(20, SECONDS);
     }
   }
 
-  private void run() throws Exception {
+  private void run() throws InterruptedException {
     logger.info("Begin test case: " + testCase);
     ArrayList<Thread> threads = new ArrayList<>();
     for (InnerClient c : clients) {
-      Thread t = new Thread(c::run);
+      Thread t = new Thread(() -> {
+        try {
+          c.run();
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt(); // Properly re-interrupt the thread
+          throw new RuntimeException("Thread was interrupted during execution", e);
+        }
+      });
       t.start();
       threads.add(t);
     }

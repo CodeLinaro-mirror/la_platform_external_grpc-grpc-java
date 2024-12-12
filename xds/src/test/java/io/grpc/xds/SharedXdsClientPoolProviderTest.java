@@ -23,11 +23,14 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import io.grpc.InsecureChannelCredentials;
+import io.grpc.MetricRecorder;
 import io.grpc.internal.ObjectPool;
-import io.grpc.xds.Bootstrapper.BootstrapInfo;
-import io.grpc.xds.Bootstrapper.ServerInfo;
-import io.grpc.xds.EnvoyProtoData.Node;
 import io.grpc.xds.SharedXdsClientPoolProvider.RefCountedXdsClientObjectPool;
+import io.grpc.xds.client.Bootstrapper.BootstrapInfo;
+import io.grpc.xds.client.Bootstrapper.ServerInfo;
+import io.grpc.xds.client.EnvoyProtoData.Node;
+import io.grpc.xds.client.XdsClient;
+import io.grpc.xds.client.XdsInitializationException;
 import java.util.Collections;
 import org.junit.Rule;
 import org.junit.Test;
@@ -49,9 +52,11 @@ public class SharedXdsClientPoolProviderTest {
   @Rule
   public final ExpectedException thrown = ExpectedException.none();
   private final Node node = Node.newBuilder().setId("SharedXdsClientPoolProviderTest").build();
+  private final MetricRecorder metricRecorder = new MetricRecorder() {};
+  private static final String DUMMY_TARGET = "dummy";
 
   @Mock
-  private Bootstrapper bootstrapper;
+  private GrpcBootstrapperImpl bootstrapper;
 
   @Test
   public void noServer() throws XdsInitializationException {
@@ -61,8 +66,8 @@ public class SharedXdsClientPoolProviderTest {
     SharedXdsClientPoolProvider provider = new SharedXdsClientPoolProvider(bootstrapper);
     thrown.expect(XdsInitializationException.class);
     thrown.expectMessage("No xDS server provided");
-    provider.getOrCreate();
-    assertThat(provider.get()).isNull();
+    provider.getOrCreate(DUMMY_TARGET, metricRecorder);
+    assertThat(provider.get(DUMMY_TARGET)).isNull();
   }
 
   @Test
@@ -73,12 +78,12 @@ public class SharedXdsClientPoolProviderTest {
     when(bootstrapper.bootstrap()).thenReturn(bootstrapInfo);
 
     SharedXdsClientPoolProvider provider = new SharedXdsClientPoolProvider(bootstrapper);
-    assertThat(provider.get()).isNull();
-    ObjectPool<XdsClient> xdsClientPool = provider.getOrCreate();
+    assertThat(provider.get(DUMMY_TARGET)).isNull();
+    ObjectPool<XdsClient> xdsClientPool = provider.getOrCreate(DUMMY_TARGET, metricRecorder);
     verify(bootstrapper).bootstrap();
-    assertThat(provider.getOrCreate()).isSameInstanceAs(xdsClientPool);
-    assertThat(provider.get()).isNotNull();
-    assertThat(provider.get()).isSameInstanceAs(xdsClientPool);
+    assertThat(provider.getOrCreate(DUMMY_TARGET, metricRecorder)).isSameInstanceAs(xdsClientPool);
+    assertThat(provider.get(DUMMY_TARGET)).isNotNull();
+    assertThat(provider.get(DUMMY_TARGET)).isSameInstanceAs(xdsClientPool);
     verifyNoMoreInteractions(bootstrapper);
   }
 
@@ -87,7 +92,9 @@ public class SharedXdsClientPoolProviderTest {
     ServerInfo server = ServerInfo.create(SERVER_URI, InsecureChannelCredentials.create());
     BootstrapInfo bootstrapInfo =
         BootstrapInfo.builder().servers(Collections.singletonList(server)).node(node).build();
-    RefCountedXdsClientObjectPool xdsClientPool = new RefCountedXdsClientObjectPool(bootstrapInfo);
+    SharedXdsClientPoolProvider provider = new SharedXdsClientPoolProvider(bootstrapper);
+    RefCountedXdsClientObjectPool xdsClientPool =
+        provider.new RefCountedXdsClientObjectPool(bootstrapInfo, DUMMY_TARGET, metricRecorder);
     assertThat(xdsClientPool.getXdsClientForTest()).isNull();
     XdsClient xdsClient = xdsClientPool.getObject();
     assertThat(xdsClientPool.getXdsClientForTest()).isNotNull();
@@ -99,7 +106,9 @@ public class SharedXdsClientPoolProviderTest {
     ServerInfo server = ServerInfo.create(SERVER_URI, InsecureChannelCredentials.create());
     BootstrapInfo bootstrapInfo =
         BootstrapInfo.builder().servers(Collections.singletonList(server)).node(node).build();
-    RefCountedXdsClientObjectPool xdsClientPool = new RefCountedXdsClientObjectPool(bootstrapInfo);
+    SharedXdsClientPoolProvider provider = new SharedXdsClientPoolProvider(bootstrapper);
+    RefCountedXdsClientObjectPool xdsClientPool =
+        provider.new RefCountedXdsClientObjectPool(bootstrapInfo, DUMMY_TARGET, metricRecorder);
     // getObject once
     XdsClient xdsClient = xdsClientPool.getObject();
     assertThat(xdsClient).isNotNull();
@@ -118,7 +127,9 @@ public class SharedXdsClientPoolProviderTest {
     ServerInfo server = ServerInfo.create(SERVER_URI, InsecureChannelCredentials.create());
     BootstrapInfo bootstrapInfo =
         BootstrapInfo.builder().servers(Collections.singletonList(server)).node(node).build();
-    RefCountedXdsClientObjectPool xdsClientPool = new RefCountedXdsClientObjectPool(bootstrapInfo);
+    SharedXdsClientPoolProvider provider = new SharedXdsClientPoolProvider(bootstrapper);
+    RefCountedXdsClientObjectPool xdsClientPool =
+        provider.new RefCountedXdsClientObjectPool(bootstrapInfo, DUMMY_TARGET, metricRecorder);
     XdsClient xdsClient1 = xdsClientPool.getObject();
     assertThat(xdsClientPool.returnObject(xdsClient1)).isNull();
     assertThat(xdsClient1.isShutDown()).isTrue();

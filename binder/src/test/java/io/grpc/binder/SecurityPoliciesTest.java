@@ -30,9 +30,6 @@ import android.content.Context;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
-import android.os.Build;
-import android.os.Build.VERSION;
-import android.os.Build.VERSION_CODES;
 import android.os.Process;
 import androidx.test.core.app.ApplicationProvider;
 import com.google.common.collect.ImmutableList;
@@ -110,8 +107,7 @@ public final class SecurityPoliciesTest {
   }
 
   @Test
-  public void testHasSignature_succeedsIfPackageNameAndSignaturesMatch()
-      throws Exception {
+  public void testHasSignature_succeedsIfPackageNameAndSignaturesMatch() throws Exception {
     PackageInfo info =
         newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
 
@@ -155,8 +151,7 @@ public final class SecurityPoliciesTest {
   }
 
   @Test
-  public void testOneOfSignatures_succeedsIfPackageNameAndSignaturesMatch()
-      throws Exception {
+  public void testOneOfSignatures_succeedsIfPackageNameAndSignaturesMatch() throws Exception {
     PackageInfo info =
         newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
 
@@ -192,8 +187,7 @@ public final class SecurityPoliciesTest {
   }
 
   @Test
-  public void testOneOfSignature_succeedsIfPackageNameAndOneOfSignaturesMatch()
-      throws Exception {
+  public void testOneOfSignature_succeedsIfPackageNameAndOneOfSignaturesMatch() throws Exception {
     PackageInfo info =
         newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
 
@@ -209,11 +203,7 @@ public final class SecurityPoliciesTest {
 
   @Test
   public void testHasSignature_failsIfUidUnknown() throws Exception {
-    policy =
-        SecurityPolicies.hasSignature(
-            packageManager,
-            appContext.getPackageName(),
-            SIG1);
+    policy = SecurityPolicies.hasSignature(packageManager, appContext.getPackageName(), SIG1);
 
     assertThat(policy.checkAuthorization(OTHER_UID_UNKNOWN).getCode())
         .isEqualTo(Status.UNAUTHENTICATED.getCode());
@@ -333,14 +323,12 @@ public final class SecurityPoliciesTest {
   }
 
   @Test
-  @Config(sdk = 18)
   public void testIsDeviceOwner_succeedsForDeviceOwner() throws Exception {
     PackageInfo info =
         newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
 
     installPackages(OTHER_UID, info);
-    shadowOf(devicePolicyManager)
-        .setDeviceOwner(new ComponentName(OTHER_UID_PACKAGE_NAME, "foo"));
+    shadowOf(devicePolicyManager).setDeviceOwner(new ComponentName(OTHER_UID_PACKAGE_NAME, "foo"));
 
     policy = SecurityPolicies.isDeviceOwner(appContext);
 
@@ -348,7 +336,6 @@ public final class SecurityPoliciesTest {
   }
 
   @Test
-  @Config(sdk = 18)
   public void testIsDeviceOwner_failsForNotDeviceOwner() throws Exception {
     PackageInfo info =
         newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
@@ -357,28 +344,16 @@ public final class SecurityPoliciesTest {
 
     policy = SecurityPolicies.isDeviceOwner(appContext);
 
-    assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.PERMISSION_DENIED.getCode());
+    assertThat(policy.checkAuthorization(OTHER_UID).getCode())
+        .isEqualTo(Status.PERMISSION_DENIED.getCode());
   }
 
   @Test
-  @Config(sdk = 18)
   public void testIsDeviceOwner_failsWhenNoPackagesForUid() throws Exception {
     policy = SecurityPolicies.isDeviceOwner(appContext);
 
-    assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.UNAUTHENTICATED.getCode());
-  }
-
-  @Test
-  @Config(sdk = 17)
-  public void testIsDeviceOwner_failsForSdkLevelTooLow() throws Exception {
-    PackageInfo info =
-        newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
-
-    installPackages(OTHER_UID, info);
-
-    policy = SecurityPolicies.isDeviceOwner(appContext);
-
-    assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.PERMISSION_DENIED.getCode());
+    assertThat(policy.checkAuthorization(OTHER_UID).getCode())
+        .isEqualTo(Status.UNAUTHENTICATED.getCode());
   }
 
   @Test
@@ -388,8 +363,7 @@ public final class SecurityPoliciesTest {
         newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
 
     installPackages(OTHER_UID, info);
-    shadowOf(devicePolicyManager)
-        .setProfileOwner(new ComponentName(OTHER_UID_PACKAGE_NAME, "foo"));
+    shadowOf(devicePolicyManager).setProfileOwner(new ComponentName(OTHER_UID_PACKAGE_NAME, "foo"));
 
     policy = SecurityPolicies.isProfileOwner(appContext);
 
@@ -406,7 +380,8 @@ public final class SecurityPoliciesTest {
 
     policy = SecurityPolicies.isProfileOwner(appContext);
 
-    assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.PERMISSION_DENIED.getCode());
+    assertThat(policy.checkAuthorization(OTHER_UID).getCode())
+        .isEqualTo(Status.PERMISSION_DENIED.getCode());
   }
 
   @Test
@@ -414,20 +389,8 @@ public final class SecurityPoliciesTest {
   public void testIsProfileOwner_failsWhenNoPackagesForUid() throws Exception {
     policy = SecurityPolicies.isProfileOwner(appContext);
 
-    assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.UNAUTHENTICATED.getCode());
-  }
-
-  @Test
-  @Config(sdk = 19)
-  public void testIsProfileOwner_failsForSdkLevelTooLow() throws Exception {
-    PackageInfo info =
-        newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
-
-    installPackages(OTHER_UID, info);
-
-    policy = SecurityPolicies.isProfileOwner(appContext);
-
-    assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.PERMISSION_DENIED.getCode());
+    assertThat(policy.checkAuthorization(OTHER_UID).getCode())
+        .isEqualTo(Status.UNAUTHENTICATED.getCode());
   }
 
   @Test
@@ -437,14 +400,12 @@ public final class SecurityPoliciesTest {
         newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
 
     installPackages(OTHER_UID, info);
-    shadowOf(devicePolicyManager)
-        .setProfileOwner(new ComponentName(OTHER_UID_PACKAGE_NAME, "foo"));
+    shadowOf(devicePolicyManager).setProfileOwner(new ComponentName(OTHER_UID_PACKAGE_NAME, "foo"));
     shadowOf(devicePolicyManager).setOrganizationOwnedDeviceWithManagedProfile(true);
 
     policy = SecurityPolicies.isProfileOwnerOnOrganizationOwnedDevice(appContext);
 
     assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.OK.getCode());
-
   }
 
   @Test
@@ -454,13 +415,13 @@ public final class SecurityPoliciesTest {
         newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
 
     installPackages(OTHER_UID, info);
-    shadowOf(devicePolicyManager)
-        .setProfileOwner(new ComponentName(OTHER_UID_PACKAGE_NAME, "foo"));
+    shadowOf(devicePolicyManager).setProfileOwner(new ComponentName(OTHER_UID_PACKAGE_NAME, "foo"));
     shadowOf(devicePolicyManager).setOrganizationOwnedDeviceWithManagedProfile(false);
 
     policy = SecurityPolicies.isProfileOwnerOnOrganizationOwnedDevice(appContext);
 
-    assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.PERMISSION_DENIED.getCode());
+    assertThat(policy.checkAuthorization(OTHER_UID).getCode())
+        .isEqualTo(Status.PERMISSION_DENIED.getCode());
   }
 
   @Test
@@ -473,7 +434,8 @@ public final class SecurityPoliciesTest {
 
     policy = SecurityPolicies.isProfileOwnerOnOrganizationOwnedDevice(appContext);
 
-    assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.PERMISSION_DENIED.getCode());
+    assertThat(policy.checkAuthorization(OTHER_UID).getCode())
+        .isEqualTo(Status.PERMISSION_DENIED.getCode());
   }
 
   @Test
@@ -481,7 +443,8 @@ public final class SecurityPoliciesTest {
   public void testIsProfileOwnerOnOrgOwned_failsWhenNoPackagesForUid() throws Exception {
     policy = SecurityPolicies.isProfileOwnerOnOrganizationOwnedDevice(appContext);
 
-    assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.UNAUTHENTICATED.getCode());
+    assertThat(policy.checkAuthorization(OTHER_UID).getCode())
+        .isEqualTo(Status.UNAUTHENTICATED.getCode());
   }
 
   @Test
@@ -494,7 +457,8 @@ public final class SecurityPoliciesTest {
 
     policy = SecurityPolicies.isProfileOwner(appContext);
 
-    assertThat(policy.checkAuthorization(OTHER_UID).getCode()).isEqualTo(Status.PERMISSION_DENIED.getCode());
+    assertThat(policy.checkAuthorization(OTHER_UID).getCode())
+        .isEqualTo(Status.PERMISSION_DENIED.getCode());
   }
 
   private static PackageInfoBuilder newBuilder() {
@@ -521,6 +485,7 @@ public final class SecurityPoliciesTest {
       return this;
     }
 
+    @SuppressWarnings("deprecation") // 'signatures': We don't yet support signing cert rotation.
     public PackageInfo build() {
       checkState(this.packageName != null, "packageName is a mandatory field");
 
@@ -697,8 +662,8 @@ public final class SecurityPoliciesTest {
 
   @Test
   public void
-  testOneOfSignatureSha256Hash_failsIfPackageNameDoNotMatchAndOneOfSignatureHashesMatch()
-      throws Exception {
+      testOneOfSignatureSha256Hash_failsIfPackageNameDoNotMatchAndOneOfSignatureHashesMatch()
+          throws Exception {
     PackageInfo info =
         newBuilder().setPackageName(OTHER_UID_PACKAGE_NAME).setSignatures(SIG2).build();
     installPackages(OTHER_UID, info);

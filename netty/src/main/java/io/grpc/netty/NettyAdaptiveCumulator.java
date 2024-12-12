@@ -23,6 +23,12 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.CompositeByteBuf;
 import io.netty.handler.codec.ByteToMessageDecoder.Cumulator;
 
+
+/**
+ * "Adaptive" cumulator: cumulate {@link ByteBuf}s by dynamically switching between merge and
+ * compose strategies.
+ */
+
 class NettyAdaptiveCumulator implements Cumulator {
   private final int composeMinSize;
 
@@ -152,6 +158,7 @@ class NettyAdaptiveCumulator implements Cumulator {
     try {
       if (tail.refCnt() == 1 && !tail.isReadOnly() && newTailSize <= tail.maxCapacity()) {
         // Ideal case: the tail isn't shared, and can be expanded to the required capacity.
+
         // Take ownership of the tail.
         newTail = tail.retain();
 
@@ -188,6 +195,7 @@ class NettyAdaptiveCumulator implements Cumulator {
          *   as pronounced because the capacity is doubled with each reallocation.
          */
         newTail.writeBytes(in);
+
       } else {
         // The tail is shared, or not expandable. Replace it with a new buffer of desired capacity.
         newTail = alloc.buffer(alloc.calculateNewCapacity(newTailSize, Integer.MAX_VALUE));
@@ -196,6 +204,7 @@ class NettyAdaptiveCumulator implements Cumulator {
             .writerIndex(newTailSize);
         in.readerIndex(in.writerIndex());
       }
+
       // Store readerIndex to avoid out of bounds writerIndex during component replacement.
       int prevReader = composite.readerIndex();
       // Remove the old tail, reset writer index.
@@ -204,16 +213,11 @@ class NettyAdaptiveCumulator implements Cumulator {
       composite.addFlattenedComponents(true, newTail);
       // New tail's ownership transferred to the composite buf.
       newTail = null;
-      in.release();
-      in = null;
-      // Restore the reader. In case it fails we restore the reader after releasing/forgetting
-      // the input and the new tail so that finally block can handles them properly.
       composite.readerIndex(prevReader);
+      // Input buffer was successfully merged with the tail.
+      // Must be the last line in the try because we release it only on success.
+      in.release();
     } finally {
-      // Input buffer was merged with the tail.
-      if (in != null) {
-        in.release();
-      }
       // If new tail's ownership isn't transferred to the composite buf.
       // Release it to prevent a leak.
       if (newTail != null) {

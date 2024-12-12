@@ -21,19 +21,14 @@ import static com.google.common.truth.Truth.assertWithMessage;
 import static io.grpc.stub.ClientCalls.blockingServerStreamingCall;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import com.google.auth.oauth2.AccessToken;
-import com.google.auth.oauth2.ComputeEngineCredentials;
-import com.google.auth.oauth2.GoogleCredentials;
-import com.google.auth.oauth2.OAuth2Credentials;
-import com.google.auth.oauth2.ServiceAccountCredentials;
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Function;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.ByteStreams;
@@ -45,7 +40,6 @@ import io.grpc.CallOptions;
 import io.grpc.Channel;
 import io.grpc.ClientCall;
 import io.grpc.ClientInterceptor;
-import io.grpc.ClientInterceptors;
 import io.grpc.ClientStreamTracer;
 import io.grpc.Context;
 import io.grpc.Grpc;
@@ -62,7 +56,6 @@ import io.grpc.ServerInterceptors;
 import io.grpc.ServerStreamTracer;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
-import io.grpc.auth.MoreCallCredentials;
 import io.grpc.census.InternalCensusStatsAccessor;
 import io.grpc.census.internal.DeprecatedCensusConstants;
 import io.grpc.internal.GrpcUtil;
@@ -77,7 +70,6 @@ import io.grpc.internal.testing.TestClientStreamTracer;
 import io.grpc.internal.testing.TestServerStreamTracer;
 import io.grpc.internal.testing.TestStreamTracer;
 import io.grpc.stub.ClientCallStreamObserver;
-import io.grpc.stub.ClientCalls;
 import io.grpc.stub.MetadataUtils;
 import io.grpc.stub.StreamObserver;
 import io.grpc.testing.TestUtils;
@@ -92,7 +84,6 @@ import io.grpc.testing.integration.Messages.StreamingInputCallRequest;
 import io.grpc.testing.integration.Messages.StreamingInputCallResponse;
 import io.grpc.testing.integration.Messages.StreamingOutputCallRequest;
 import io.grpc.testing.integration.Messages.StreamingOutputCallResponse;
-import io.grpc.testing.integration.Messages.TestOrcaReport;
 import io.opencensus.contrib.grpc.metrics.RpcMeasureConstants;
 import io.opencensus.stats.Measure;
 import io.opencensus.stats.Measure.MeasureDouble;
@@ -118,7 +109,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
@@ -144,7 +134,7 @@ import org.junit.rules.Timeout;
 /**
  * Abstract base class for all GRPC transport tests.
  *
- * <p> New tests should avoid using Mockito to support running on AppEngine.</p>
+ * <p>New tests should avoid using Mockito to support running on AppEngine.
  */
 public abstract class AbstractInteropTest {
   private static Logger logger = Logger.getLogger(AbstractInteropTest.class.getName());
@@ -191,11 +181,6 @@ public abstract class AbstractInteropTest {
   private final LinkedBlockingQueue<ServerStreamTracerInfo> serverStreamTracers =
       new LinkedBlockingQueue<>();
 
-  static final CallOptions.Key<AtomicReference<TestOrcaReport>>
-      ORCA_RPC_REPORT_KEY = CallOptions.Key.create("orca-rpc-report");
-  static final CallOptions.Key<AtomicReference<TestOrcaReport>>
-      ORCA_OOB_REPORT_KEY = CallOptions.Key.create("orca-oob-report");
-
   private static final class ServerStreamTracerInfo {
     final String fullMethodName;
     final InteropServerStreamTracer tracer;
@@ -220,7 +205,7 @@ public abstract class AbstractInteropTest {
    * Constructor for tests.
    */
   protected AbstractInteropTest() {
-    TestRule timeout = Timeout.seconds(60);
+    TestRule timeout = Timeout.seconds(90);
     try {
       timeout = new DisableOnDebug(timeout);
     } catch (Throwable t) {
@@ -313,6 +298,11 @@ public abstract class AbstractInteropTest {
 
   private final LinkedBlockingQueue<TestClientStreamTracer> clientStreamTracers =
       new LinkedBlockingQueue<>();
+  private boolean enableClientStreamTracers = true;
+
+  void setEnableClientStreamTracers(boolean enableClientStreamTracers) {
+    this.enableClientStreamTracers = enableClientStreamTracers;
+  }
 
   private final ClientStreamTracer.Factory clientStreamTracerFactory =
       new ClientStreamTracer.Factory() {
@@ -343,9 +333,14 @@ public abstract class AbstractInteropTest {
     startServer(serverBuilder);
     channel = createChannel();
 
-    blockingStub =
-        TestServiceGrpc.newBlockingStub(channel).withInterceptors(tracerSetupInterceptor);
-    asyncStub = TestServiceGrpc.newStub(channel).withInterceptors(tracerSetupInterceptor);
+    if (enableClientStreamTracers) {
+      blockingStub =
+          TestServiceGrpc.newBlockingStub(channel).withInterceptors(tracerSetupInterceptor);
+      asyncStub = TestServiceGrpc.newStub(channel).withInterceptors(tracerSetupInterceptor);
+    } else {
+      blockingStub = TestServiceGrpc.newBlockingStub(channel);
+      asyncStub = TestServiceGrpc.newStub(channel);
+    }
 
     ClientInterceptor[] additionalInterceptors = getAdditionalInterceptors();
     if (additionalInterceptors != null) {
@@ -439,47 +434,6 @@ public abstract class AbstractInteropTest {
     channel.shutdown();
     channel = createChannelBuilder().enableRetry().build();
     assertEquals(EMPTY, TestServiceGrpc.newBlockingStub(channel).emptyCall(EMPTY));
-  }
-
-  /** Sends a cacheable unary rpc using GET. Requires that the server is behind a caching proxy. */
-  public void cacheableUnary() {
-    // THIS TEST IS BROKEN. Enabling safe just on the MethodDescriptor does nothing by itself. This
-    // test would need to enable GET on the channel.
-    // Set safe to true.
-    MethodDescriptor<SimpleRequest, SimpleResponse> safeCacheableUnaryCallMethod =
-        TestServiceGrpc.getCacheableUnaryCallMethod().toBuilder().setSafe(true).build();
-    // Set fake user IP since some proxies (GFE) won't cache requests from localhost.
-    Metadata.Key<String> userIpKey = Metadata.Key.of("x-user-ip", Metadata.ASCII_STRING_MARSHALLER);
-    Metadata metadata = new Metadata();
-    metadata.put(userIpKey, "1.2.3.4");
-    Channel channelWithUserIpKey =
-        ClientInterceptors.intercept(channel, MetadataUtils.newAttachHeadersInterceptor(metadata));
-    SimpleRequest requests1And2 =
-        SimpleRequest.newBuilder()
-            .setPayload(
-                Payload.newBuilder()
-                    .setBody(ByteString.copyFromUtf8(String.valueOf(System.nanoTime()))))
-            .build();
-    SimpleRequest request3 =
-        SimpleRequest.newBuilder()
-            .setPayload(
-                Payload.newBuilder()
-                    .setBody(ByteString.copyFromUtf8(String.valueOf(System.nanoTime()))))
-            .build();
-
-    SimpleResponse response1 =
-        ClientCalls.blockingUnaryCall(
-            channelWithUserIpKey, safeCacheableUnaryCallMethod, CallOptions.DEFAULT, requests1And2);
-    SimpleResponse response2 =
-        ClientCalls.blockingUnaryCall(
-            channelWithUserIpKey, safeCacheableUnaryCallMethod, CallOptions.DEFAULT, requests1And2);
-    SimpleResponse response3 =
-        ClientCalls.blockingUnaryCall(
-            channelWithUserIpKey, safeCacheableUnaryCallMethod, CallOptions.DEFAULT, request3);
-
-    assertEquals(response1, response2);
-    assertNotEquals(response1, response3);
-    // THIS TEST IS BROKEN. See comment at start of method.
   }
 
   @Test
@@ -591,26 +545,6 @@ public abstract class AbstractInteropTest {
         Status.Code.OK,
         Collections.singleton(responseShouldBeUncompressed),
         Collections.singleton(goldenResponse));
-  }
-
-  /**
-   * Assuming "pick_first" policy is used, tests that all requests are sent to the same server.
-   */
-  public void pickFirstUnary() throws Exception {
-    SimpleRequest request = SimpleRequest.newBuilder()
-        .setResponseSize(1)
-        .setFillServerId(true)
-        .setPayload(Payload.newBuilder().setBody(ByteString.copyFrom(new byte[1])))
-        .build();
-
-    SimpleResponse firstResponse = blockingStub.unaryCall(request);
-    // Increase the chance of all servers are connected, in case the channel should be doing
-    // round_robin instead.
-    Thread.sleep(5000);
-    for (int i = 0; i < 100; i++) {
-      SimpleResponse response = blockingStub.unaryCall(request);
-      assertThat(response.getServerId()).isEqualTo(firstResponse.getServerId());
-    }
   }
 
   @Test
@@ -1180,7 +1114,7 @@ public abstract class AbstractInteropTest {
       assertTrue(desc,
           // There is a race between client and server-side deadline expiration.
           // If client expires first, it'd generate this message
-          Pattern.matches("deadline exceeded after .*s. \\[.*\\]", desc)
+          Pattern.matches("CallOptions deadline exceeded after .*s. \\[.*\\]", desc)
           // If server expires first, it'd reset the stream and client would generate a different
           // message
           || desc.startsWith("ClientCall was cancelled at or after deadline."));
@@ -1249,7 +1183,7 @@ public abstract class AbstractInteropTest {
     } catch (StatusRuntimeException ex) {
       assertEquals(Status.Code.DEADLINE_EXCEEDED, ex.getStatus().getCode());
       assertThat(ex.getStatus().getDescription())
-        .startsWith("ClientCall started after CallOptions deadline was exceeded");
+          .startsWith("ClientCall started after CallOptions deadline was exceeded");
     }
 
     // CensusStreamTracerModule record final status in the interceptor, thus is guaranteed to be
@@ -1282,7 +1216,7 @@ public abstract class AbstractInteropTest {
     } catch (StatusRuntimeException ex) {
       assertEquals(Status.Code.DEADLINE_EXCEEDED, ex.getStatus().getCode());
       assertThat(ex.getStatus().getDescription())
-        .startsWith("ClientCall started after CallOptions deadline was exceeded");
+          .startsWith("ClientCall started after CallOptions deadline was exceeded");
     }
     if (metricsExpected()) {
       MetricsRecord clientStartRecord = clientStatsRecorder.pollRecord(5, TimeUnit.SECONDS);
@@ -1747,247 +1681,6 @@ public abstract class AbstractInteropTest {
     assertNotNull(obtainLocalClientAddr());
   }
 
-  /**
-   *  Test backend metrics per query reporting: expect the test client LB policy to receive load
-   *  reports.
-   */
-  public void testOrcaPerRpc() throws Exception {
-    AtomicReference<TestOrcaReport> reportHolder = new AtomicReference<>();
-    TestOrcaReport answer = TestOrcaReport.newBuilder()
-        .setCpuUtilization(0.8210)
-        .setMemoryUtilization(0.5847)
-        .putRequestCost("cost", 3456.32)
-        .putUtilization("util", 0.30499)
-        .build();
-    blockingStub.withOption(ORCA_RPC_REPORT_KEY, reportHolder).unaryCall(
-        SimpleRequest.newBuilder().setOrcaPerQueryReport(answer).build());
-    assertThat(reportHolder.get()).isEqualTo(answer);
-  }
-
-  /**
-   *  Test backend metrics OOB reporting: expect the test client LB policy to receive load reports.
-   */
-  public void testOrcaOob() throws Exception {
-    AtomicReference<TestOrcaReport> reportHolder = new AtomicReference<>();
-    final TestOrcaReport answer = TestOrcaReport.newBuilder()
-        .setCpuUtilization(0.8210)
-        .setMemoryUtilization(0.5847)
-        .putUtilization("util", 0.30499)
-        .build();
-    final TestOrcaReport answer2 = TestOrcaReport.newBuilder()
-        .setCpuUtilization(0.29309)
-        .setMemoryUtilization(0.2)
-        .putUtilization("util", 0.2039)
-        .build();
-
-    final int retryLimit = 5;
-    BlockingQueue<Object> queue = new LinkedBlockingQueue<>();
-    final Object lastItem = new Object();
-    StreamObserver<StreamingOutputCallRequest> streamObserver =
-        asyncStub.fullDuplexCall(new StreamObserver<StreamingOutputCallResponse>() {
-
-          @Override
-          public void onNext(StreamingOutputCallResponse value) {
-            queue.add(value);
-          }
-
-          @Override
-          public void onError(Throwable t) {
-            queue.add(t);
-          }
-
-          @Override
-          public void onCompleted() {
-            queue.add(lastItem);
-          }
-        });
-
-    streamObserver.onNext(StreamingOutputCallRequest.newBuilder()
-        .setOrcaOobReport(answer)
-        .addResponseParameters(ResponseParameters.newBuilder().setSize(1).build()).build());
-    assertThat(queue.take()).isInstanceOf(StreamingOutputCallResponse.class);
-    int i = 0;
-    for (; i < retryLimit; i++) {
-      Thread.sleep(1000);
-      blockingStub.withOption(ORCA_OOB_REPORT_KEY, reportHolder).emptyCall(EMPTY);
-      if (answer.equals(reportHolder.get())) {
-        break;
-      }
-    }
-    assertThat(i).isLessThan(retryLimit);
-    streamObserver.onNext(StreamingOutputCallRequest.newBuilder()
-        .setOrcaOobReport(answer2)
-        .addResponseParameters(ResponseParameters.newBuilder().setSize(1).build()).build());
-    assertThat(queue.take()).isInstanceOf(StreamingOutputCallResponse.class);
-
-    for (i = 0; i < retryLimit; i++) {
-      Thread.sleep(1000);
-      blockingStub.withOption(ORCA_OOB_REPORT_KEY, reportHolder).emptyCall(EMPTY);
-      if (reportHolder.get().equals(answer2)) {
-        break;
-      }
-    }
-    assertThat(i).isLessThan(retryLimit);
-    streamObserver.onCompleted();
-    assertThat(queue.take()).isSameInstanceAs(lastItem);
-  }
-
-  /** Sends a large unary rpc with service account credentials. */
-  public void serviceAccountCreds(String jsonKey, InputStream credentialsStream, String authScope)
-      throws Exception {
-    // cast to ServiceAccountCredentials to double-check the right type of object was created.
-    GoogleCredentials credentials =
-        ServiceAccountCredentials.class.cast(GoogleCredentials.fromStream(credentialsStream));
-    credentials = credentials.createScoped(Arrays.asList(authScope));
-    TestServiceGrpc.TestServiceBlockingStub stub = blockingStub
-        .withCallCredentials(MoreCallCredentials.from(credentials));
-    final SimpleRequest request = SimpleRequest.newBuilder()
-        .setFillUsername(true)
-        .setFillOauthScope(true)
-        .setResponseSize(314159)
-        .setPayload(Payload.newBuilder()
-            .setBody(ByteString.copyFrom(new byte[271828])))
-        .build();
-
-    final SimpleResponse response = stub.unaryCall(request);
-    assertFalse(response.getUsername().isEmpty());
-    assertTrue("Received username: " + response.getUsername(),
-        jsonKey.contains(response.getUsername()));
-    assertFalse(response.getOauthScope().isEmpty());
-    assertTrue("Received oauth scope: " + response.getOauthScope(),
-        authScope.contains(response.getOauthScope()));
-
-    final SimpleResponse goldenResponse = SimpleResponse.newBuilder()
-        .setOauthScope(response.getOauthScope())
-        .setUsername(response.getUsername())
-        .setPayload(Payload.newBuilder()
-            .setBody(ByteString.copyFrom(new byte[314159])))
-        .build();
-    assertResponse(goldenResponse, response);
-  }
-
-  /** Sends a large unary rpc with compute engine credentials. */
-  public void computeEngineCreds(String serviceAccount, String oauthScope) throws Exception {
-    ComputeEngineCredentials credentials = ComputeEngineCredentials.create();
-    TestServiceGrpc.TestServiceBlockingStub stub = blockingStub
-        .withCallCredentials(MoreCallCredentials.from(credentials));
-    final SimpleRequest request = SimpleRequest.newBuilder()
-        .setFillUsername(true)
-        .setFillOauthScope(true)
-        .setResponseSize(314159)
-        .setPayload(Payload.newBuilder()
-            .setBody(ByteString.copyFrom(new byte[271828])))
-        .build();
-
-    final SimpleResponse response = stub.unaryCall(request);
-    assertEquals(serviceAccount, response.getUsername());
-    assertFalse(response.getOauthScope().isEmpty());
-    assertTrue("Received oauth scope: " + response.getOauthScope(),
-        oauthScope.contains(response.getOauthScope()));
-
-    final SimpleResponse goldenResponse = SimpleResponse.newBuilder()
-        .setOauthScope(response.getOauthScope())
-        .setUsername(response.getUsername())
-        .setPayload(Payload.newBuilder()
-            .setBody(ByteString.copyFrom(new byte[314159])))
-        .build();
-    assertResponse(goldenResponse, response);
-  }
-
-  /** Sends an unary rpc with ComputeEngineChannelBuilder. */
-  public void computeEngineChannelCredentials(
-      String defaultServiceAccount,
-      TestServiceGrpc.TestServiceBlockingStub computeEngineStub) throws Exception {
-    final SimpleRequest request = SimpleRequest.newBuilder()
-        .setFillUsername(true)
-        .setResponseSize(314159)
-        .setPayload(Payload.newBuilder()
-        .setBody(ByteString.copyFrom(new byte[271828])))
-        .build();
-    final SimpleResponse response = computeEngineStub.unaryCall(request);
-    assertEquals(defaultServiceAccount, response.getUsername());
-    final SimpleResponse goldenResponse = SimpleResponse.newBuilder()
-        .setUsername(defaultServiceAccount)
-        .setPayload(Payload.newBuilder()
-        .setBody(ByteString.copyFrom(new byte[314159])))
-        .build();
-    assertResponse(goldenResponse, response);
-  }
-
-  /** Test JWT-based auth. */
-  public void jwtTokenCreds(InputStream serviceAccountJson) throws Exception {
-    final SimpleRequest request = SimpleRequest.newBuilder()
-        .setResponseSize(314159)
-        .setPayload(Payload.newBuilder()
-            .setBody(ByteString.copyFrom(new byte[271828])))
-        .setFillUsername(true)
-        .build();
-
-    ServiceAccountCredentials credentials = (ServiceAccountCredentials)
-        GoogleCredentials.fromStream(serviceAccountJson);
-    TestServiceGrpc.TestServiceBlockingStub stub = blockingStub
-        .withCallCredentials(MoreCallCredentials.from(credentials));
-    SimpleResponse response = stub.unaryCall(request);
-    assertEquals(credentials.getClientEmail(), response.getUsername());
-    assertEquals(314159, response.getPayload().getBody().size());
-  }
-
-  /** Sends a unary rpc with raw oauth2 access token credentials. */
-  public void oauth2AuthToken(String jsonKey, InputStream credentialsStream, String authScope)
-      throws Exception {
-    GoogleCredentials utilCredentials =
-        GoogleCredentials.fromStream(credentialsStream);
-    utilCredentials = utilCredentials.createScoped(Arrays.asList(authScope));
-    AccessToken accessToken = utilCredentials.refreshAccessToken();
-
-    OAuth2Credentials credentials = OAuth2Credentials.create(accessToken);
-
-    TestServiceGrpc.TestServiceBlockingStub stub = blockingStub
-        .withCallCredentials(MoreCallCredentials.from(credentials));
-    final SimpleRequest request = SimpleRequest.newBuilder()
-        .setFillUsername(true)
-        .setFillOauthScope(true)
-        .build();
-
-    final SimpleResponse response = stub.unaryCall(request);
-    assertFalse(response.getUsername().isEmpty());
-    assertTrue("Received username: " + response.getUsername(),
-        jsonKey.contains(response.getUsername()));
-    assertFalse(response.getOauthScope().isEmpty());
-    assertTrue("Received oauth scope: " + response.getOauthScope(),
-        authScope.contains(response.getOauthScope()));
-  }
-
-  /** Sends a unary rpc with "per rpc" raw oauth2 access token credentials. */
-  public void perRpcCreds(String jsonKey, InputStream credentialsStream, String oauthScope)
-      throws Exception {
-    // In gRpc Java, we don't have per Rpc credentials, user can use an intercepted stub only once
-    // for that purpose.
-    // So, this test is identical to oauth2_auth_token test.
-    oauth2AuthToken(jsonKey, credentialsStream, oauthScope);
-  }
-
-  /** Sends an unary rpc with "google default credentials". */
-  public void googleDefaultCredentials(
-      String defaultServiceAccount,
-      TestServiceGrpc.TestServiceBlockingStub googleDefaultStub) throws Exception {
-    final SimpleRequest request = SimpleRequest.newBuilder()
-        .setFillUsername(true)
-        .setResponseSize(314159)
-        .setPayload(Payload.newBuilder()
-            .setBody(ByteString.copyFrom(new byte[271828])))
-        .build();
-    final SimpleResponse response = googleDefaultStub.unaryCall(request);
-    assertEquals(defaultServiceAccount, response.getUsername());
-
-    final SimpleResponse goldenResponse = SimpleResponse.newBuilder()
-        .setUsername(defaultServiceAccount)
-        .setPayload(Payload.newBuilder()
-            .setBody(ByteString.copyFrom(new byte[314159])))
-        .build();
-    assertResponse(goldenResponse, response);
-  }
-
   private static class SoakIterationResult {
     public SoakIterationResult(long latencyMs, Status status) {
       this.latencyMs = latencyMs;
@@ -2006,19 +1699,41 @@ public abstract class AbstractInteropTest {
     private Status status = Status.OK;
   }
 
+
+  private static class ThreadResults {
+    private int threadFailures = 0;
+    private int iterationsDone = 0;
+    private Histogram latencies = new Histogram(4);
+
+    public int getThreadFailures() {
+      return threadFailures;
+    }
+
+    public int getIterationsDone() {
+      return iterationsDone;
+    }
+
+    public Histogram getLatencies() {
+      return latencies;
+    }
+  }
+
   private SoakIterationResult performOneSoakIteration(
-      TestServiceGrpc.TestServiceBlockingStub soakStub) throws Exception {
+      TestServiceGrpc.TestServiceBlockingStub soakStub, int soakRequestSize, int soakResponseSize)
+      throws InterruptedException {
     long startNs = System.nanoTime();
     Status status = Status.OK;
     try {
       final SimpleRequest request =
           SimpleRequest.newBuilder()
-              .setResponseSize(314159)
-              .setPayload(Payload.newBuilder().setBody(ByteString.copyFrom(new byte[271828])))
+              .setResponseSize(soakResponseSize)
+              .setPayload(
+                  Payload.newBuilder().setBody(ByteString.copyFrom(new byte[soakRequestSize])))
               .build();
       final SimpleResponse goldenResponse =
           SimpleResponse.newBuilder()
-              .setPayload(Payload.newBuilder().setBody(ByteString.copyFrom(new byte[314159])))
+              .setPayload(
+                  Payload.newBuilder().setBody(ByteString.copyFrom(new byte[soakResponseSize])))
               .build();
       assertResponse(goldenResponse, soakStub.unaryCall(request));
     } catch (StatusRuntimeException e) {
@@ -2029,68 +1744,67 @@ public abstract class AbstractInteropTest {
   }
 
   /**
-    * Runs large unary RPCs in a loop with configurable failure thresholds
-    * and channel creation behavior.
+   * Runs large unary RPCs in a loop with configurable failure thresholds
+   * and channel creation behavior.
    */
   public void performSoakTest(
       String serverUri,
-      boolean resetChannelPerIteration,
       int soakIterations,
       int maxFailures,
       int maxAcceptablePerIterationLatencyMs,
       int minTimeMsBetweenRpcs,
-      int overallTimeoutSeconds)
-      throws Exception {
-    int iterationsDone = 0;
-    int totalFailures = 0;
-    Histogram latencies = new Histogram(4 /* number of significant value digits */);
-    long startNs = System.nanoTime();
-    ManagedChannel soakChannel = createChannel();
-    TestServiceGrpc.TestServiceBlockingStub soakStub = TestServiceGrpc
-        .newBlockingStub(soakChannel)
-        .withInterceptors(recordClientCallInterceptor(clientCallCapture));
-    for (int i = 0; i < soakIterations; i++) {
-      if (System.nanoTime() - startNs >= TimeUnit.SECONDS.toNanos(overallTimeoutSeconds)) {
-        break;
-      }
-      long earliestNextStartNs = System.nanoTime()
-          + TimeUnit.MILLISECONDS.toNanos(minTimeMsBetweenRpcs);
-      if (resetChannelPerIteration) {
-        soakChannel.shutdownNow();
-        soakChannel.awaitTermination(10, TimeUnit.SECONDS);
-        soakChannel = createChannel();
-        soakStub = TestServiceGrpc
-            .newBlockingStub(soakChannel)
-            .withInterceptors(recordClientCallInterceptor(clientCallCapture));
-      }
-      SoakIterationResult result = performOneSoakIteration(soakStub);
-      SocketAddress peer = clientCallCapture
-          .get().getAttributes().get(Grpc.TRANSPORT_ATTR_REMOTE_ADDR);
-      StringBuilder logStr = new StringBuilder(
-          String.format(
-              Locale.US,
-              "soak iteration: %d elapsed_ms: %d peer: %s server_uri: %s",
-              i, result.getLatencyMs(), peer != null ? peer.toString() : "null", serverUri));
-      if (!result.getStatus().equals(Status.OK)) {
-        totalFailures++;
-        logStr.append(String.format(" failed: %s", result.getStatus()));
-      } else if (result.getLatencyMs() > maxAcceptablePerIterationLatencyMs) {
-        totalFailures++;
-        logStr.append(
-            " exceeds max acceptable latency: " + maxAcceptablePerIterationLatencyMs);
-      } else {
-        logStr.append(" succeeded");
-      }
-      System.err.println(logStr.toString());
-      iterationsDone++;
-      latencies.recordValue(result.getLatencyMs());
-      long remainingNs = earliestNextStartNs - System.nanoTime();
-      if (remainingNs > 0) {
-        TimeUnit.NANOSECONDS.sleep(remainingNs);
-      }
+      int overallTimeoutSeconds,
+      int soakRequestSize,
+      int soakResponseSize,
+      int numThreads,
+      Function<ManagedChannel, ManagedChannel> createNewChannel)
+      throws InterruptedException {
+    if (soakIterations % numThreads != 0) {
+      throw new IllegalArgumentException("soakIterations must be evenly divisible by numThreads.");
     }
-    soakChannel.shutdownNow();
-    soakChannel.awaitTermination(10, TimeUnit.SECONDS);
+    ManagedChannel sharedChannel = createChannel();
+    long startNs = System.nanoTime();
+    Thread[] threads = new Thread[numThreads];
+    int soakIterationsPerThread = soakIterations / numThreads;
+    List<ThreadResults> threadResultsList = new ArrayList<>(numThreads);
+    for (int i = 0; i < numThreads; i++) {
+      threadResultsList.add(new ThreadResults());
+    }
+    for (int threadInd = 0; threadInd < numThreads; threadInd++) {
+      final int currentThreadInd = threadInd;
+      threads[threadInd] = new Thread(() -> {
+        try {
+          executeSoakTestInThread(
+              soakIterationsPerThread,
+              startNs,
+              minTimeMsBetweenRpcs,
+              soakRequestSize,
+              soakResponseSize,
+              maxAcceptablePerIterationLatencyMs,
+              overallTimeoutSeconds,
+              serverUri,
+              threadResultsList.get(currentThreadInd),
+              sharedChannel,
+              createNewChannel);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new RuntimeException("Thread interrupted: " + e.getMessage(), e);
+        }
+      });
+      threads[threadInd].start();
+    }
+    for (Thread thread : threads) {
+      thread.join();
+    }
+
+    int totalFailures = 0;
+    int iterationsDone = 0;
+    Histogram latencies = new Histogram(4);
+    for (ThreadResults threadResult :threadResultsList) {
+      totalFailures += threadResult.getThreadFailures();
+      iterationsDone += threadResult.getIterationsDone();
+      latencies.add(threadResult.getLatencies());
+    }
     System.err.println(
         String.format(
             Locale.US,
@@ -2122,9 +1836,80 @@ public abstract class AbstractInteropTest {
                 + "threshold: %d.",
             serverUri, totalFailures, maxFailures);
     assertTrue(tooManyFailuresErrorMessage, totalFailures <= maxFailures);
+    shutdownChannel(sharedChannel);
   }
 
-  protected static void assertSuccess(StreamRecorder<?> recorder) {
+  private void shutdownChannel(ManagedChannel channel) throws InterruptedException {
+    if (channel != null) {
+      channel.shutdownNow();
+      channel.awaitTermination(10, TimeUnit.SECONDS);
+    }
+  }
+
+  protected ManagedChannel createNewChannel(ManagedChannel currentChannel) {
+    try {
+      shutdownChannel(currentChannel);
+      return createChannel();
+    } catch (InterruptedException e) {
+      throw new RuntimeException("Interrupted while creating a new channel", e);
+    }
+  }
+
+  private void executeSoakTestInThread(
+      int soakIterationsPerThread,
+      long startNs,
+      int minTimeMsBetweenRpcs,
+      int soakRequestSize,
+      int soakResponseSize,
+      int maxAcceptablePerIterationLatencyMs,
+      int overallTimeoutSeconds,
+      String serverUri,
+      ThreadResults threadResults,
+      ManagedChannel sharedChannel,
+      Function<ManagedChannel, ManagedChannel> maybeCreateChannel) throws InterruptedException {
+    ManagedChannel currentChannel = sharedChannel;
+    for (int i = 0; i < soakIterationsPerThread; i++) {
+      if (System.nanoTime() - startNs >= TimeUnit.SECONDS.toNanos(overallTimeoutSeconds)) {
+        break;
+      }
+      long earliestNextStartNs = System.nanoTime()
+          + TimeUnit.MILLISECONDS.toNanos(minTimeMsBetweenRpcs);
+
+      currentChannel = maybeCreateChannel.apply(currentChannel);
+      TestServiceGrpc.TestServiceBlockingStub currentStub = TestServiceGrpc
+          .newBlockingStub(currentChannel)
+              .withInterceptors(recordClientCallInterceptor(clientCallCapture));
+      SoakIterationResult result = performOneSoakIteration(currentStub,
+          soakRequestSize, soakResponseSize);
+      SocketAddress peer = clientCallCapture
+          .get().getAttributes().get(Grpc.TRANSPORT_ATTR_REMOTE_ADDR);
+      StringBuilder logStr = new StringBuilder(
+          String.format(
+              Locale.US,
+              "thread id: %d soak iteration: %d elapsed_ms: %d peer: %s server_uri: %s",
+              Thread.currentThread().getId(),
+              i, result.getLatencyMs(), peer != null ? peer.toString() : "null", serverUri));
+      if (!result.getStatus().equals(Status.OK)) {
+        threadResults.threadFailures++;
+        logStr.append(String.format(" failed: %s", result.getStatus()));
+      } else if (result.getLatencyMs() > maxAcceptablePerIterationLatencyMs) {
+        threadResults.threadFailures++;
+        logStr.append(
+            " exceeds max acceptable latency: " + maxAcceptablePerIterationLatencyMs);
+      } else {
+        logStr.append(" succeeded");
+      }
+      System.err.println(logStr.toString());
+      threadResults.iterationsDone++;
+      threadResults.getLatencies().recordValue(result.getLatencyMs());
+      long remainingNs = earliestNextStartNs - System.nanoTime();
+      if (remainingNs > 0) {
+        TimeUnit.NANOSECONDS.sleep(remainingNs);
+      }
+    }
+  }
+
+  private static void assertSuccess(StreamRecorder<?> recorder) {
     if (recorder.getError() != null) {
       throw new AssertionError(recorder.getError());
     }
@@ -2192,11 +1977,11 @@ public abstract class AbstractInteropTest {
     X509Certificate x509cert = (X509Certificate) certificates.get(0);
 
     assertEquals(1, certificates.size());
-    assertEquals(tlsInfo, x509cert.getSubjectDN().toString());
+    assertEquals(tlsInfo, x509cert.getSubjectX500Principal().toString());
   }
 
   protected int operationTimeoutMillis() {
-    return 5000;
+    return 7000;
   }
 
   /**
@@ -2465,7 +2250,7 @@ public abstract class AbstractInteropTest {
     }
   }
 
-  private void assertResponse(SimpleResponse expected, SimpleResponse actual) {
+  public void assertResponse(SimpleResponse expected, SimpleResponse actual) {
     assertPayload(expected.getPayload(), actual.getPayload());
     assertEquals(expected.getUsername(), actual.getUsername());
     assertEquals(expected.getOauthScope(), actual.getOauthScope());

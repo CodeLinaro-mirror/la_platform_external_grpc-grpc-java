@@ -149,11 +149,10 @@ abstract class RetriableStream<ReqT> implements ClientStream {
     this.throttle = throttle;
   }
 
-  @SuppressWarnings("GuardedBy")
+  @SuppressWarnings("GuardedBy")  // TODO(b/145386688) this.lock==ScheduledCancellor.lock so ok
   @Nullable // null if already committed
   @CheckReturnValue
   private Runnable commit(final Substream winningSubstream) {
-
     synchronized (lock) {
       if (state.winningSubstream != null) {
         return null;
@@ -165,10 +164,9 @@ abstract class RetriableStream<ReqT> implements ClientStream {
       // subtract the share of this RPC from channelBufferUsed.
       channelBufferUsed.addAndGet(-perRpcBufferUsed);
 
+      final boolean wasCancelled = (scheduledRetry != null) ? scheduledRetry.isCancelled() : false;
       final Future<?> retryFuture;
       if (scheduledRetry != null) {
-        // TODO(b/145386688): This access should be guarded by 'this.scheduledRetry.lock'; instead
-        // found: 'this.lock'
         retryFuture = scheduledRetry.markCancelled();
         scheduledRetry = null;
       } else {
@@ -177,8 +175,6 @@ abstract class RetriableStream<ReqT> implements ClientStream {
       // cancel the scheduled hedging if it is scheduled prior to the commitment
       final Future<?> hedgingFuture;
       if (scheduledHedging != null) {
-        // TODO(b/145386688): This access should be guarded by 'this.scheduledHedging.lock'; instead
-        // found: 'this.lock'
         hedgingFuture = scheduledHedging.markCancelled();
         scheduledHedging = null;
       } else {
@@ -196,7 +192,21 @@ abstract class RetriableStream<ReqT> implements ClientStream {
           }
           if (retryFuture != null) {
             retryFuture.cancel(false);
+            if (!wasCancelled && inFlightSubStreams.decrementAndGet() == Integer.MIN_VALUE) {
+              assert savedCloseMasterListenerReason != null;
+              listenerSerializeExecutor.execute(
+                  new Runnable() {
+                    @Override
+                    public void run() {
+                      isClosed = true;
+                      masterListener.closed(savedCloseMasterListenerReason.status,
+                          savedCloseMasterListenerReason.progress,
+                          savedCloseMasterListenerReason.metadata);
+                    }
+                  });
+            }
           }
+
           if (hedgingFuture != null) {
             hedgingFuture.cancel(false);
           }
@@ -212,13 +222,23 @@ abstract class RetriableStream<ReqT> implements ClientStream {
   abstract void postCommit();
 
   /**
-   * Calls commit() and if successful runs the post commit task.
+   * Calls commit() and if successful runs the post commit task. Post commit task will be non-null
+   * for only once. The post commit task cancels other non-winning streams on separate transport
+   * threads, thus it must be run on the callExecutor to prevent deadlocks between multiple stream
+   * transports.(issues/10314)
+   * This method should be called only in subListener callbacks. This guarantees callExecutor
+   * schedules tasks before master listener closes, which is protected by the inFlightSubStreams
+   * decorative. That is because:
+   * For a successful winning stream, other streams won't attempt to close master listener.
+   * For a cancelled winning stream (noop), other stream won't attempt to close master listener.
+   * For a failed/closed winning stream, the last closed stream closes the master listener, and
+   * callExecutor scheduling happens-before that.
    */
   private void commitAndRun(Substream winningSubstream) {
     Runnable postCommitTask = commit(winningSubstream);
 
     if (postCommitTask != null) {
-      postCommitTask.run();
+      callExecutor.execute(postCommitTask);
     }
   }
 
@@ -405,7 +425,7 @@ abstract class RetriableStream<ReqT> implements ClientStream {
     drain(substream);
   }
 
-  @SuppressWarnings("GuardedBy")
+  @SuppressWarnings("GuardedBy")  // TODO(b/145386688) this.lock==ScheduledCancellor.lock so ok
   private void pushbackHedging(@Nullable Integer delayMillis) {
     if (delayMillis == null) {
       return;
@@ -424,8 +444,6 @@ abstract class RetriableStream<ReqT> implements ClientStream {
         return;
       }
 
-      // TODO(b/145386688): This access should be guarded by 'this.scheduledHedging.lock'; instead
-      // found: 'this.lock'
       futureToBeCancelled = scheduledHedging.markCancelled();
       scheduledHedging = future = new FutureCanceller(lock);
     }
@@ -459,16 +477,13 @@ abstract class RetriableStream<ReqT> implements ClientStream {
       }
       callExecutor.execute(
           new Runnable() {
-            @SuppressWarnings("GuardedBy")
+            @SuppressWarnings("GuardedBy")  //TODO(b/145386688) lock==ScheduledCancellor.lock so ok
             @Override
             public void run() {
               boolean cancelled = false;
               FutureCanceller future = null;
 
               synchronized (lock) {
-                // TODO(b/145386688): This access should be guarded by
-                // 'HedgingRunnable.this.scheduledHedgingRef.lock'; instead found:
-                // 'RetriableStream.this.lock'
                 if (scheduledHedgingRef.isCancelled()) {
                   cancelled = true;
                 } else {
@@ -800,13 +815,11 @@ abstract class RetriableStream<ReqT> implements ClientStream {
         && !state.hedgingFrozen;
   }
 
-  @SuppressWarnings("GuardedBy")
+  @SuppressWarnings("GuardedBy")  // TODO(b/145386688) this.lock==ScheduledCancellor.lock so ok
   private void freezeHedging() {
     Future<?> futureToBeCancelled = null;
     synchronized (lock) {
       if (scheduledHedging != null) {
-        // TODO(b/145386688): This access should be guarded by 'this.scheduledHedging.lock'; instead
-        // found: 'this.lock'
         futureToBeCancelled = scheduledHedging.markCancelled();
         scheduledHedging = null;
       }
@@ -989,9 +1002,19 @@ abstract class RetriableStream<ReqT> implements ClientStream {
               synchronized (lock) {
                 scheduledRetry = scheduledRetryCopy = new FutureCanceller(lock);
               }
+
               class RetryBackoffRunnable implements Runnable {
                 @Override
+                @SuppressWarnings("FutureReturnValueIgnored")
                 public void run() {
+                  synchronized (scheduledRetryCopy.lock) {
+                    if (scheduledRetryCopy.isCancelled()) {
+                      return;
+                    } else {
+                      scheduledRetryCopy.markCancelled();
+                    }
+                  }
+
                   callExecutor.execute(
                       new Runnable() {
                         @Override
@@ -1066,6 +1089,10 @@ abstract class RetriableStream<ReqT> implements ClientStream {
         if (!isFatal || (pushbackMillis != null && pushbackMillis < 0)) {
           isThrottled = !throttle.onQualifiedFailureThenCheckIsAboveThreshold();
         }
+      }
+      if (!isFatal && !isThrottled && !status.isOk()
+          && (pushbackMillis != null && pushbackMillis > 0)) {
+        pushbackMillis = 0; // We want the retry after a nonfatal error to be immediate
       }
       return new HedgingPlan(!isFatal && !isThrottled, pushbackMillis);
     }
@@ -1549,10 +1576,15 @@ abstract class RetriableStream<ReqT> implements ClientStream {
     }
 
     void setFuture(Future<?> future) {
+      boolean wasCancelled;
       synchronized (lock) {
-        if (!cancelled) {
+        wasCancelled = cancelled;
+        if (!wasCancelled) {
           this.future = future;
         }
+      }
+      if (wasCancelled) {
+        future.cancel(false);
       }
     }
 

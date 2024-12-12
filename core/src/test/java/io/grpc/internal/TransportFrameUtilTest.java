@@ -16,10 +16,10 @@
 
 package io.grpc.internal;
 
-import static com.google.common.base.Charsets.US_ASCII;
-import static com.google.common.base.Charsets.UTF_8;
 import static io.grpc.Metadata.ASCII_STRING_MARSHALLER;
 import static io.grpc.Metadata.BINARY_BYTE_MARSHALLER;
+import static java.nio.charset.StandardCharsets.US_ASCII;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -46,16 +46,16 @@ public class TransportFrameUtilTest {
 
   private static final BinaryMarshaller<String> UTF8_STRING_MARSHALLER =
       new BinaryMarshaller<String>() {
-    @Override
-    public byte[] toBytes(String value) {
-      return value.getBytes(UTF_8);
-    }
+        @Override
+        public byte[] toBytes(String value) {
+          return value.getBytes(UTF_8);
+        }
 
-    @Override
-    public String parseBytes(byte[] serialized) {
-      return new String(serialized, UTF_8);
-    }
-  };
+        @Override
+        public String parseBytes(byte[] serialized) {
+          return new String(serialized, UTF_8);
+        }
+      };
 
   private static final Metadata.Key<String> PLAIN_STRING =
       Metadata.Key.of("plainstring", ASCII_STRING_MARSHALLER);

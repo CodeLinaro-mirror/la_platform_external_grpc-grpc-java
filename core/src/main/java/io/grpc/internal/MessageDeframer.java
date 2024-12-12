@@ -112,7 +112,7 @@ public class MessageDeframer implements Closeable, Deframer {
    *
    * @param listener listener for deframer events.
    * @param decompressor the compression used if a compressed frame is encountered, with
-   *  {@code NONE} meaning unsupported
+   *                     {@code NONE} meaning unsupported
    * @param maxMessageSize the maximum allowed size for received messages.
    */
   public MessageDeframer(
@@ -406,9 +406,11 @@ public class MessageDeframer implements Closeable, Deframer {
     // There is no reliable way to get the uncompressed size per message when it's compressed,
     // because the uncompressed bytes are provided through an InputStream whose total size is
     // unknown until all bytes are read, and we don't know when it happens.
-    statsTraceCtx.inboundMessageRead(currentMessageSeqNo, inboundBodyWireSize, -1);
+    statsTraceCtx.inboundMessageRead(currentMessageSeqNo, inboundBodyWireSize,
+        (compressedFlag || fullStreamDecompressor != null) ? -1 : inboundBodyWireSize);
     inboundBodyWireSize = 0;
     InputStream stream = compressedFlag ? getCompressedBody() : getUncompressedBody();
+    nextFrame.touch();
     nextFrame = null;
     listener.messagesAvailable(new SingleMessageProducer(stream));
 
