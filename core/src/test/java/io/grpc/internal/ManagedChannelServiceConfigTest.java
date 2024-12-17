@@ -27,7 +27,6 @@ import com.google.common.collect.ImmutableMap;
 import io.grpc.CallOptions;
 import io.grpc.InternalConfigSelector;
 import io.grpc.InternalConfigSelector.Result;
-import io.grpc.LoadBalancer.PickDetailsConsumer;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.internal.ManagedChannelServiceConfig.MethodInfo;
@@ -210,8 +209,7 @@ public class ManagedChannelServiceConfigTest {
     InternalConfigSelector configSelector = serviceConfig.getDefaultConfigSelector();
     MethodDescriptor<?, ?> method = methodForName("service1", "method1");
     Result result = configSelector.selectConfig(
-        new PickSubchannelArgsImpl(
-            method, new Metadata(), CallOptions.DEFAULT, new PickDetailsConsumer() {}));
+        new PickSubchannelArgsImpl(method, new Metadata(), CallOptions.DEFAULT));
     MethodInfo methodInfoFromDefaultConfigSelector =
         ((ManagedChannelServiceConfig) result.getConfig()).getMethodConfig(method);
     assertThat(methodInfoFromDefaultConfigSelector)

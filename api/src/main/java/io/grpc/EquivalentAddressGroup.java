@@ -128,9 +128,6 @@ public final class EquivalentAddressGroup {
    */
   @Override
   public boolean equals(Object other) {
-    if (this == other) {
-      return true;
-    }
     if (!(other instanceof EquivalentAddressGroup)) {
       return false;
     }

@@ -10,13 +10,11 @@ description = "gRPC: All"
 def subprojects = [
     project(':grpc-api'),
     project(':grpc-auth'),
+    project(':grpc-context'),
     project(':grpc-core'),
     project(':grpc-grpclb'),
-    project(':grpc-gcp-csm-observability'),
-    project(':grpc-inprocess'),
     project(':grpc-netty'),
     project(':grpc-okhttp'),
-    project(':grpc-opentelemetry'),
     project(':grpc-protobuf'),
     project(':grpc-protobuf-lite'),
     project(':grpc-rls'),
@@ -25,7 +23,6 @@ def subprojects = [
     project(':grpc-servlet-jakarta'),
     project(':grpc-stub'),
     project(':grpc-testing'),
-    project(':grpc-util'),
     project(':grpc-xds'),
 ]
 
@@ -51,15 +48,16 @@ tasks.named("javadoc").configure {
             continue;
         }
         source subproject.javadoc.source
-        options.linksOffline.addAll subproject.javadoc.options.linksOffline
+        options.links subproject.javadoc.options.links.toArray(new String[0])
     }
 }
 
 tasks.named("jacocoTestReport").configure {
-    mustRunAfter(subprojects.jacocoTestReport.mustRunAfter)
-    mustRunAfter(project(':grpc-interop-testing').jacocoTestReport.mustRunAfter)
+    dependsOn(subprojects.jacocoTestReport.dependsOn)
+    dependsOn(project(':grpc-interop-testing').jacocoTestReport.dependsOn)
     executionData.from files(subprojects.jacocoTestReport.executionData)
             .plus(project(':grpc-interop-testing').jacocoTestReport.executionData)
+            .filter { f -> f.exists() }
     reports {
         xml.required = true
         html.required = true

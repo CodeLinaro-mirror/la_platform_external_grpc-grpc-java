@@ -33,10 +33,10 @@ import io.grpc.ChannelCredentials;
 import io.grpc.ChannelLogger;
 import io.grpc.EquivalentAddressGroup;
 import io.grpc.ExperimentalApi;
-import io.grpc.ForwardingChannelBuilder2;
 import io.grpc.HttpConnectProxiedSocketAddress;
 import io.grpc.Internal;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.internal.AbstractManagedChannelImplBuilder;
 import io.grpc.internal.AtomicBackoff;
 import io.grpc.internal.ClientTransportFactory;
 import io.grpc.internal.ConnectionClientTransport;
@@ -59,11 +59,8 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.ssl.SslContext;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -75,7 +72,8 @@ import javax.net.ssl.SSLException;
  */
 @ExperimentalApi("https://github.com/grpc/grpc-java/issues/1784")
 @CheckReturnValue
-public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyChannelBuilder> {
+public final class NettyChannelBuilder extends
+    AbstractManagedChannelImplBuilder<NettyChannelBuilder> {
 
   // 1MiB.
   public static final int DEFAULT_FLOW_CONTROL_WINDOW = 1024 * 1024;
@@ -104,8 +102,6 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
   private boolean autoFlowControl = DEFAULT_AUTO_FLOW_CONTROL;
   private int flowControlWindow = DEFAULT_FLOW_CONTROL_WINDOW;
   private int maxHeaderListSize = GrpcUtil.DEFAULT_MAX_HEADER_LIST_SIZE;
-  private int softLimitHeaderListSize = GrpcUtil.DEFAULT_MAX_HEADER_LIST_SIZE;
-  private int maxInboundMessageSize = GrpcUtil.DEFAULT_MAX_MESSAGE_SIZE;
   private long keepAliveTimeNanos = KEEPALIVE_TIME_NANOS_DISABLED;
   private long keepAliveTimeoutNanos = DEFAULT_KEEPALIVE_TIMEOUT_NANOS;
   private boolean keepAliveWithoutCalls;
@@ -119,8 +115,6 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
    * request body in the query params.
    */
   private final boolean useGetForSafeMethods = false;
-
-  private Class<? extends SocketAddress> transportSocketType = InetSocketAddress.class;
 
   /**
    * Creates a new builder with the given server address. This factory method is primarily intended
@@ -266,23 +260,8 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
    */
   @CanIgnoreReturnValue
   public NettyChannelBuilder channelType(Class<? extends Channel> channelType) {
-    return channelType(channelType, null);
-  }
-
-  /**
-   * Similar to {@link #channelType(Class)} above but allows the
-   * caller to specify the socket-type associated with the channelType.
-   *
-   * @param channelType the type of {@link Channel} to use.
-   * @param transportSocketType the associated {@link SocketAddress} type. If {@code null}, then
-   *     no compatibility check is performed between channel transport and name-resolver addresses.
-   */
-  @CanIgnoreReturnValue
-  public NettyChannelBuilder channelType(Class<? extends Channel> channelType,
-      @Nullable Class<? extends SocketAddress> transportSocketType) {
     checkNotNull(channelType, "channelType");
-    return channelFactory(new ReflectiveChannelFactory<>(channelType),
-        transportSocketType);
+    return channelFactory(new ReflectiveChannelFactory<>(channelType));
   }
 
   /**
@@ -300,22 +279,7 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
    */
   @CanIgnoreReturnValue
   public NettyChannelBuilder channelFactory(ChannelFactory<? extends Channel> channelFactory) {
-    return channelFactory(channelFactory, null);
-  }
-
-  /**
-   * Similar to {@link #channelFactory(ChannelFactory)} above but allows the
-   * caller to specify the socket-type associated with the channelFactory.
-   *
-   * @param channelFactory the {@link ChannelFactory} to use.
-   * @param transportSocketType the associated {@link SocketAddress} type. If {@code null}, then
-   *     no compatibility check is performed between channel transport and name-resolver addresses.
-   */
-  @CanIgnoreReturnValue
-  public NettyChannelBuilder channelFactory(ChannelFactory<? extends Channel> channelFactory,
-      @Nullable Class<? extends SocketAddress> transportSocketType) {
     this.channelFactory = checkNotNull(channelFactory, "channelFactory");
-    this.transportSocketType = transportSocketType;
     return this;
   }
 
@@ -453,40 +417,6 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
   public NettyChannelBuilder maxInboundMetadataSize(int bytes) {
     checkArgument(bytes > 0, "maxInboundMetadataSize must be > 0");
     this.maxHeaderListSize = bytes;
-    // Clear the soft limit setting, by setting soft limit to maxInboundMetadataSize. The
-    // maxInboundMetadataSize will take precedence be applied before soft limit check.
-    this.softLimitHeaderListSize = bytes;
-    return this;
-  }
-
-  /**
-   * Sets the size of metadata that clients are advised to not exceed. When a metadata with size
-   * larger than the soft limit is encountered there will be a probability the RPC will fail. The
-   * chance of failing increases as the metadata size approaches the hard limit.
-   * {@code Integer.MAX_VALUE} disables the enforcement. The default is implementation-dependent,
-   * but is not generally less than 8 KiB and may be unlimited.
-   *
-   * <p>This is cumulative size of the metadata. The precise calculation is
-   * implementation-dependent, but implementations are encouraged to follow the calculation used
-   * for
-   * <a href="http://httpwg.org/specs/rfc7540.html#rfc.section.6.5.2">HTTP/2's
-   * SETTINGS_MAX_HEADER_LIST_SIZE</a>. It sums the bytes from each entry's key and value, plus 32
-   * bytes of overhead per entry.
-   *
-   * @param soft the soft size limit of received metadata
-   * @param max the hard size limit of received metadata
-   * @return this
-   * @throws IllegalArgumentException if soft and/or max is non-positive, or max smaller than
-   *     soft
-   * @since 1.68.0
-   */
-  @CanIgnoreReturnValue
-  public NettyChannelBuilder maxInboundMetadataSize(int soft, int max) {
-    checkArgument(soft > 0, "softLimitHeaderListSize must be > 0");
-    checkArgument(max > soft,
-        "maxInboundMetadataSize must be greater than softLimitHeaderListSize");
-    this.softLimitHeaderListSize = soft;
-    this.maxHeaderListSize = max;
     return this;
   }
 
@@ -608,22 +538,10 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
 
     ProtocolNegotiator negotiator = protocolNegotiatorFactory.newNegotiator();
     return new NettyTransportFactory(
-        negotiator,
-        channelFactory,
-        channelOptions,
-        eventLoopGroupPool,
-        autoFlowControl,
-        flowControlWindow,
-        maxInboundMessageSize,
-        maxHeaderListSize,
-        softLimitHeaderListSize,
-        keepAliveTimeNanos,
-        keepAliveTimeoutNanos,
-        keepAliveWithoutCalls,
-        transportTracerFactory,
-        localSocketPicker,
-        useGetForSafeMethods,
-        transportSocketType);
+        negotiator, channelFactory, channelOptions,
+        eventLoopGroupPool, autoFlowControl, flowControlWindow, maxInboundMessageSize,
+        maxHeaderListSize, keepAliveTimeNanos, keepAliveTimeoutNanos, keepAliveWithoutCalls,
+        transportTracerFactory, localSocketPicker, useGetForSafeMethods);
   }
 
   @VisibleForTesting
@@ -652,7 +570,7 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
       case PLAINTEXT_UPGRADE:
         return ProtocolNegotiators.plaintextUpgrade();
       case TLS:
-        return ProtocolNegotiators.tls(sslContext, executorPool, Optional.empty());
+        return ProtocolNegotiators.tls(sslContext, executorPool);
       default:
         throw new IllegalArgumentException("Unsupported negotiationType: " + negotiationType);
     }
@@ -708,10 +626,6 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
     return this;
   }
 
-  static Collection<Class<? extends SocketAddress>> getSupportedSocketAddressTypes() {
-    return Collections.singleton(InetSocketAddress.class);
-  }
-
   private final class DefaultProtocolNegotiator implements ProtocolNegotiator.ClientFactory {
     private NegotiationType negotiationType = NegotiationType.TLS;
     private SslContext sslContext;
@@ -757,7 +671,6 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
     private final int flowControlWindow;
     private final int maxMessageSize;
     private final int maxHeaderListSize;
-    private final int softLimitHeaderListSize;
     private final long keepAliveTimeNanos;
     private final AtomicBackoff keepAliveBackoff;
     private final long keepAliveTimeoutNanos;
@@ -767,25 +680,15 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
     private final boolean useGetForSafeMethods;
 
     private boolean closed;
-    private final Class<? extends SocketAddress> transportSocketType;
 
     NettyTransportFactory(
         ProtocolNegotiator protocolNegotiator,
         ChannelFactory<? extends Channel> channelFactory,
-        Map<ChannelOption<?>, ?> channelOptions,
-        ObjectPool<? extends EventLoopGroup> groupPool,
-        boolean autoFlowControl,
-        int flowControlWindow,
-        int maxMessageSize,
-        int maxHeaderListSize,
-        int softLimitHeaderListSize,
-        long keepAliveTimeNanos,
-        long keepAliveTimeoutNanos,
-        boolean keepAliveWithoutCalls,
-        TransportTracer.Factory transportTracerFactory,
-        LocalSocketPicker localSocketPicker,
-        boolean useGetForSafeMethods,
-        Class<? extends SocketAddress> transportSocketType) {
+        Map<ChannelOption<?>, ?> channelOptions, ObjectPool<? extends EventLoopGroup> groupPool,
+        boolean autoFlowControl, int flowControlWindow, int maxMessageSize, int maxHeaderListSize,
+        long keepAliveTimeNanos, long keepAliveTimeoutNanos, boolean keepAliveWithoutCalls,
+        TransportTracer.Factory transportTracerFactory, LocalSocketPicker localSocketPicker,
+        boolean useGetForSafeMethods) {
       this.protocolNegotiator = checkNotNull(protocolNegotiator, "protocolNegotiator");
       this.channelFactory = channelFactory;
       this.channelOptions = new HashMap<ChannelOption<?>, Object>(channelOptions);
@@ -795,7 +698,6 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
       this.flowControlWindow = flowControlWindow;
       this.maxMessageSize = maxMessageSize;
       this.maxHeaderListSize = maxHeaderListSize;
-      this.softLimitHeaderListSize = softLimitHeaderListSize;
       this.keepAliveTimeNanos = keepAliveTimeNanos;
       this.keepAliveBackoff = new AtomicBackoff("keepalive time nanos", keepAliveTimeNanos);
       this.keepAliveTimeoutNanos = keepAliveTimeoutNanos;
@@ -804,7 +706,6 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
       this.localSocketPicker =
           localSocketPicker != null ? localSocketPicker : new LocalSocketPicker();
       this.useGetForSafeMethods = useGetForSafeMethods;
-      this.transportSocketType = transportSocketType;
     }
 
     @Override
@@ -832,30 +733,13 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
       };
 
       // TODO(carl-mastrangelo): Pass channelLogger in.
-      NettyClientTransport transport =
-          new NettyClientTransport(
-              serverAddress,
-              channelFactory,
-              channelOptions,
-              group,
-              localNegotiator,
-              autoFlowControl,
-              flowControlWindow,
-              maxMessageSize,
-              maxHeaderListSize,
-              softLimitHeaderListSize,
-              keepAliveTimeNanosState.get(),
-              keepAliveTimeoutNanos,
-              keepAliveWithoutCalls,
-              options.getAuthority(),
-              options.getUserAgent(),
-              tooManyPingsRunnable,
-              transportTracerFactory.create(),
-              options.getEagAttributes(),
-              localSocketPicker,
-              channelLogger,
-              useGetForSafeMethods,
-              Ticker.systemTicker());
+      NettyClientTransport transport = new NettyClientTransport(
+          serverAddress, channelFactory, channelOptions, group,
+          localNegotiator, autoFlowControl, flowControlWindow,
+          maxMessageSize, maxHeaderListSize, keepAliveTimeNanosState.get(), keepAliveTimeoutNanos,
+          keepAliveWithoutCalls, options.getAuthority(), options.getUserAgent(),
+          tooManyPingsRunnable, transportTracerFactory.create(), options.getEagAttributes(),
+          localSocketPicker, channelLogger, useGetForSafeMethods, Ticker.systemTicker());
       return transport;
     }
 
@@ -871,24 +755,11 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
       if (result.error != null) {
         return null;
       }
-      ClientTransportFactory factory =
-          new NettyTransportFactory(
-              result.negotiator.newNegotiator(),
-              channelFactory,
-              channelOptions,
-              groupPool,
-              autoFlowControl,
-              flowControlWindow,
-              maxMessageSize,
-              maxHeaderListSize,
-              softLimitHeaderListSize,
-              keepAliveTimeNanos,
-              keepAliveTimeoutNanos,
-              keepAliveWithoutCalls,
-              transportTracerFactory,
-              localSocketPicker,
-              useGetForSafeMethods,
-              transportSocketType);
+      ClientTransportFactory factory = new NettyTransportFactory(
+          result.negotiator.newNegotiator(), channelFactory, channelOptions, groupPool,
+          autoFlowControl, flowControlWindow, maxMessageSize, maxHeaderListSize, keepAliveTimeNanos,
+          keepAliveTimeoutNanos, keepAliveWithoutCalls, transportTracerFactory,  localSocketPicker,
+          useGetForSafeMethods);
       return new SwapChannelCredentialsResult(factory, result.callCredentials);
     }
 
@@ -901,12 +772,6 @@ public final class NettyChannelBuilder extends ForwardingChannelBuilder2<NettyCh
 
       protocolNegotiator.close();
       groupPool.returnObject(group);
-    }
-
-    @Override
-    public Collection<Class<? extends SocketAddress>> getSupportedSocketAddressTypes() {
-      return transportSocketType == null ? null
-          : Collections.singleton(transportSocketType);
     }
   }
 }

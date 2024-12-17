@@ -106,7 +106,8 @@ final class PingTracker {
     private synchronized void success() {
       if (!done) {
         done = true;
-        executor.execute(() -> callback.onSuccess(ticker.read() - startTimeNanos));
+        executor.execute(
+            () -> callback.onSuccess(ticker.read() - startTimeNanos));
       }
     }
   }

@@ -23,11 +23,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import io.grpc.Attributes;
@@ -48,7 +46,7 @@ import io.grpc.Status;
 import io.grpc.Status.Code;
 import io.grpc.SynchronizationContext;
 import io.grpc.internal.ObjectPool;
-import io.grpc.util.GracefulSwitchLoadBalancerAccessor;
+import io.grpc.xds.Bootstrapper.ServerInfo;
 import io.grpc.xds.CdsLoadBalancerProvider.CdsConfig;
 import io.grpc.xds.ClusterResolverLoadBalancerProvider.ClusterResolverConfig;
 import io.grpc.xds.ClusterResolverLoadBalancerProvider.ClusterResolverConfig.DiscoveryMechanism;
@@ -58,11 +56,6 @@ import io.grpc.xds.EnvoyServerProtoData.UpstreamTlsContext;
 import io.grpc.xds.LeastRequestLoadBalancer.LeastRequestConfig;
 import io.grpc.xds.RingHashLoadBalancer.RingHashConfig;
 import io.grpc.xds.XdsClusterResource.CdsUpdate;
-import io.grpc.xds.client.Bootstrapper.BootstrapInfo;
-import io.grpc.xds.client.Bootstrapper.ServerInfo;
-import io.grpc.xds.client.EnvoyProtoData;
-import io.grpc.xds.client.XdsClient;
-import io.grpc.xds.client.XdsResourceType;
 import io.grpc.xds.internal.security.CommonTlsContextTestsUtil;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -70,7 +63,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executor;
 import javax.annotation.Nullable;
 import org.junit.After;
 import org.junit.Before;
@@ -96,16 +88,6 @@ public class CdsLoadBalancer2Test {
   private static final String DNS_HOST_NAME = "backend-service-dns.googleapis.com:443";
   private static final ServerInfo LRS_SERVER_INFO =
       ServerInfo.create("lrs.googleapis.com", InsecureChannelCredentials.create());
-  private static final String SERVER_URI = "trafficdirector.googleapis.com";
-  private static final String NODE_ID =
-      "projects/42/networks/default/nodes/5c85b298-6f5b-4722-b74a-f7d1f0ccf5ad";
-  private static final EnvoyProtoData.Node BOOTSTRAP_NODE =
-      EnvoyProtoData.Node.newBuilder().setId(NODE_ID).build();
-  private static final BootstrapInfo BOOTSTRAP_INFO = BootstrapInfo.builder()
-      .servers(ImmutableList.of(
-          ServerInfo.create(SERVER_URI, InsecureChannelCredentials.create())))
-      .node(BOOTSTRAP_NODE)
-      .build();
   private final UpstreamTlsContext upstreamTlsContext =
       CommonTlsContextTestsUtil.buildUpstreamTlsContext("google_cloud_private_spiffe", true);
   private final OutlierDetection outlierDetection = OutlierDetection.create(
@@ -190,9 +172,7 @@ public class CdsLoadBalancer2Test {
     DiscoveryMechanism instance = Iterables.getOnlyElement(childLbConfig.discoveryMechanisms);
     assertDiscoveryMechanism(instance, CLUSTER, DiscoveryMechanism.Type.EDS, EDS_SERVICE_NAME,
         null, LRS_SERVER_INFO, 100L, upstreamTlsContext, outlierDetection);
-    assertThat(
-        GracefulSwitchLoadBalancerAccessor.getChildProvider(childLbConfig.lbConfig).getPolicyName())
-        .isEqualTo("round_robin");
+    assertThat(childLbConfig.lbPolicy.getProvider().getPolicyName()).isEqualTo("round_robin");
   }
 
   @Test
@@ -209,12 +189,9 @@ public class CdsLoadBalancer2Test {
     DiscoveryMechanism instance = Iterables.getOnlyElement(childLbConfig.discoveryMechanisms);
     assertDiscoveryMechanism(instance, CLUSTER, DiscoveryMechanism.Type.LOGICAL_DNS, null,
         DNS_HOST_NAME, LRS_SERVER_INFO, 100L, upstreamTlsContext, null);
-    assertThat(
-        GracefulSwitchLoadBalancerAccessor.getChildProvider(childLbConfig.lbConfig).getPolicyName())
+    assertThat(childLbConfig.lbPolicy.getProvider().getPolicyName())
         .isEqualTo("least_request_experimental");
-    LeastRequestConfig lrConfig = (LeastRequestConfig)
-        GracefulSwitchLoadBalancerAccessor.getChildConfig(childLbConfig.lbConfig);
-    assertThat(lrConfig.choiceCount).isEqualTo(3);
+    assertThat(((LeastRequestConfig) childLbConfig.lbPolicy.getConfig()).choiceCount).isEqualTo(3);
   }
 
   @Test
@@ -223,8 +200,7 @@ public class CdsLoadBalancer2Test {
     verify(helper).updateBalancingState(
         eq(ConnectivityState.TRANSIENT_FAILURE), pickerCaptor.capture());
     Status unavailable = Status.UNAVAILABLE.withDescription(
-        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER
-            + " xDS node ID: " + NODE_ID);
+        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER);
     assertPicker(pickerCaptor.getValue(), unavailable, null);
     assertThat(childBalancers).isEmpty();
   }
@@ -267,8 +243,7 @@ public class CdsLoadBalancer2Test {
     xdsClient.deliverResourceNotExist(CLUSTER);
     assertThat(childBalancer.shutdown).isTrue();
     Status unavailable = Status.UNAVAILABLE.withDescription(
-        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER
-            + " xDS node ID: " + NODE_ID);
+        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER);
     verify(helper).updateBalancingState(
         eq(ConnectivityState.TRANSIENT_FAILURE), pickerCaptor.capture());
     assertPicker(pickerCaptor.getValue(), unavailable, null);
@@ -323,13 +298,10 @@ public class CdsLoadBalancer2Test {
         upstreamTlsContext, outlierDetection);
     assertDiscoveryMechanism(childLbConfig.discoveryMechanisms.get(2), cluster4,
         DiscoveryMechanism.Type.EDS, null, null, LRS_SERVER_INFO, 300L, null, outlierDetection);
-    assertThat(
-        GracefulSwitchLoadBalancerAccessor.getChildProvider(childLbConfig.lbConfig).getPolicyName())
+    assertThat(childLbConfig.lbPolicy.getProvider().getPolicyName())
         .isEqualTo("ring_hash_experimental");  // dominated by top-level cluster's config
-    RingHashConfig ringHashConfig = (RingHashConfig)
-        GracefulSwitchLoadBalancerAccessor.getChildConfig(childLbConfig.lbConfig);
-    assertThat(ringHashConfig.minRingSize).isEqualTo(100L);
-    assertThat(ringHashConfig.maxRingSize).isEqualTo(1000L);
+    assertThat(((RingHashConfig) childLbConfig.lbPolicy.getConfig()).minRingSize).isEqualTo(100L);
+    assertThat(((RingHashConfig) childLbConfig.lbPolicy.getConfig()).maxRingSize).isEqualTo(1000L);
   }
 
   @Test
@@ -345,8 +317,7 @@ public class CdsLoadBalancer2Test {
     verify(helper).updateBalancingState(
         eq(ConnectivityState.TRANSIENT_FAILURE), pickerCaptor.capture());
     Status unavailable = Status.UNAVAILABLE.withDescription(
-        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER
-            + " xDS node ID: " + NODE_ID);
+        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER);
     assertPicker(pickerCaptor.getValue(), unavailable, null);
     assertThat(childBalancers).isEmpty();
   }
@@ -394,8 +365,7 @@ public class CdsLoadBalancer2Test {
     verify(helper).updateBalancingState(
         eq(ConnectivityState.TRANSIENT_FAILURE), pickerCaptor.capture());
     Status unavailable = Status.UNAVAILABLE.withDescription(
-        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER
-            + " xDS node ID: " + NODE_ID);
+        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER);
     assertPicker(pickerCaptor.getValue(), unavailable, null);
     assertThat(childBalancer.shutdown).isTrue();
     assertThat(childBalancers).isEmpty();
@@ -434,8 +404,7 @@ public class CdsLoadBalancer2Test {
     verify(helper).updateBalancingState(
         eq(ConnectivityState.TRANSIENT_FAILURE), pickerCaptor.capture());
     Status unavailable = Status.UNAVAILABLE.withDescription(
-        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER
-            + " xDS node ID: " + NODE_ID);
+        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER);
     assertPicker(pickerCaptor.getValue(), unavailable, null);
     assertThat(childBalancer.shutdown).isTrue();
     assertThat(childBalancers).isEmpty();
@@ -483,141 +452,10 @@ public class CdsLoadBalancer2Test {
     verify(helper).updateBalancingState(
         eq(ConnectivityState.TRANSIENT_FAILURE), pickerCaptor.capture());
     Status unavailable = Status.UNAVAILABLE.withDescription(
-        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER
-            + " xDS node ID: " + NODE_ID);
+        "CDS error: found 0 leaf (logical DNS or EDS) clusters for root cluster " + CLUSTER);
     assertPicker(pickerCaptor.getValue(), unavailable, null);
     assertThat(childBalancer.shutdown).isTrue();
     assertThat(childBalancers).isEmpty();
-  }
-
-  @Test
-  public void aggregateCluster_withLoops() {
-    String cluster1 = "cluster-01.googleapis.com";
-    // CLUSTER (aggr.) -> [cluster1]
-    CdsUpdate update =
-        CdsUpdate.forAggregate(CLUSTER, Collections.singletonList(cluster1))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(CLUSTER, update);
-    assertThat(xdsClient.watchers.keySet()).containsExactly(CLUSTER, cluster1);
-
-    // CLUSTER (aggr.) -> [cluster2 (aggr.)]
-    String cluster2 = "cluster-02.googleapis.com";
-    update =
-        CdsUpdate.forAggregate(cluster1, Collections.singletonList(cluster2))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster1, update);
-    assertThat(xdsClient.watchers.keySet()).containsExactly(CLUSTER, cluster1, cluster2);
-
-    // cluster2 (aggr.) -> [cluster3 (EDS), cluster1 (parent), cluster2 (self), cluster3 (dup)]
-    String cluster3 = "cluster-03.googleapis.com";
-    CdsUpdate update2 =
-        CdsUpdate.forAggregate(cluster2, Arrays.asList(cluster3, cluster1, cluster2, cluster3))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster2, update2);
-    assertThat(xdsClient.watchers.keySet()).containsExactly(CLUSTER, cluster1, cluster2, cluster3);
-
-    reset(helper);
-    CdsUpdate update3 = CdsUpdate.forEds(cluster3, EDS_SERVICE_NAME, LRS_SERVER_INFO, 100L,
-        upstreamTlsContext, outlierDetection).roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster3, update3);
-    verify(helper).updateBalancingState(
-        eq(ConnectivityState.TRANSIENT_FAILURE), pickerCaptor.capture());
-    Status unavailable = Status.UNAVAILABLE.withDescription(
-        "CDS error: circular aggregate clusters directly under cluster-02.googleapis.com for root"
-            + " cluster cluster-foo.googleapis.com, named [cluster-01.googleapis.com,"
-            + " cluster-02.googleapis.com], xDS node ID: " + NODE_ID);
-    assertPicker(pickerCaptor.getValue(), unavailable, null);
-  }
-
-  @Test
-  public void aggregateCluster_withLoops_afterEds() {
-    String cluster1 = "cluster-01.googleapis.com";
-    // CLUSTER (aggr.) -> [cluster1]
-    CdsUpdate update =
-        CdsUpdate.forAggregate(CLUSTER, Collections.singletonList(cluster1))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(CLUSTER, update);
-    assertThat(xdsClient.watchers.keySet()).containsExactly(CLUSTER, cluster1);
-
-    // CLUSTER (aggr.) -> [cluster2 (aggr.)]
-    String cluster2 = "cluster-02.googleapis.com";
-    update =
-        CdsUpdate.forAggregate(cluster1, Collections.singletonList(cluster2))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster1, update);
-    assertThat(xdsClient.watchers.keySet()).containsExactly(CLUSTER, cluster1, cluster2);
-
-    String cluster3 = "cluster-03.googleapis.com";
-    CdsUpdate update2 =
-        CdsUpdate.forAggregate(cluster2, Arrays.asList(cluster3))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster2, update2);
-    CdsUpdate update3 = CdsUpdate.forEds(cluster3, EDS_SERVICE_NAME, LRS_SERVER_INFO, 100L,
-        upstreamTlsContext, outlierDetection).roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster3, update3);
-
-    // cluster2 (aggr.) -> [cluster3 (EDS)]
-    CdsUpdate update2a =
-        CdsUpdate.forAggregate(cluster2, Arrays.asList(cluster3, cluster1, cluster2, cluster3))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster2, update2a);
-    assertThat(xdsClient.watchers.keySet()).containsExactly(CLUSTER, cluster1, cluster2, cluster3);
-    verify(helper).updateBalancingState(
-        eq(ConnectivityState.TRANSIENT_FAILURE), pickerCaptor.capture());
-    Status unavailable = Status.UNAVAILABLE.withDescription(
-        "CDS error: circular aggregate clusters directly under cluster-02.googleapis.com for root"
-            + " cluster cluster-foo.googleapis.com, named [cluster-01.googleapis.com,"
-            + " cluster-02.googleapis.com], xDS node ID: " + NODE_ID);
-    assertPicker(pickerCaptor.getValue(), unavailable, null);
-  }
-
-  @Test
-  public void aggregateCluster_duplicateChildren() {
-    String cluster1 = "cluster-01.googleapis.com";
-    String cluster2 = "cluster-02.googleapis.com";
-    String cluster3 = "cluster-03.googleapis.com";
-    String cluster4 = "cluster-04.googleapis.com";
-
-    // CLUSTER (aggr.) -> [cluster1]
-    CdsUpdate update =
-        CdsUpdate.forAggregate(CLUSTER, Collections.singletonList(cluster1))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(CLUSTER, update);
-    assertThat(xdsClient.watchers.keySet()).containsExactly(CLUSTER, cluster1);
-
-    // cluster1 (aggr) -> [cluster3 (EDS), cluster2 (aggr), cluster4 (aggr)]
-    CdsUpdate update1 =
-        CdsUpdate.forAggregate(cluster1, Arrays.asList(cluster3, cluster2, cluster4, cluster3))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster1, update1);
-    assertThat(xdsClient.watchers.keySet()).containsExactly(
-        cluster3, cluster4, cluster2, cluster1, CLUSTER);
-    xdsClient.watchers.values().forEach(list -> assertThat(list.size()).isEqualTo(1));
-
-    // cluster2 (agg) -> [cluster3 (EDS), cluster4 {agg}] with dups
-    CdsUpdate update2 =
-        CdsUpdate.forAggregate(cluster2, Arrays.asList(cluster3, cluster4, cluster3))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster2, update2);
-
-    // Define EDS cluster
-    CdsUpdate update3 = CdsUpdate.forEds(cluster3, EDS_SERVICE_NAME, LRS_SERVER_INFO, 100L,
-        upstreamTlsContext, outlierDetection).roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster3, update3);
-
-    // cluster4 (agg) -> [cluster3 (EDS)] with dups (3 copies)
-    CdsUpdate update4 =
-        CdsUpdate.forAggregate(cluster4, Arrays.asList(cluster3, cluster3, cluster3))
-            .roundRobinLbPolicy().build();
-    xdsClient.deliverCdsUpdate(cluster4, update4);
-    xdsClient.watchers.values().forEach(list -> assertThat(list.size()).isEqualTo(1));
-
-    FakeLoadBalancer childBalancer = Iterables.getOnlyElement(childBalancers);
-    ClusterResolverConfig childLbConfig = (ClusterResolverConfig) childBalancer.config;
-    assertThat(childLbConfig.discoveryMechanisms).hasSize(1);
-    DiscoveryMechanism instance = Iterables.getOnlyElement(childLbConfig.discoveryMechanisms);
-    assertDiscoveryMechanism(instance, cluster3, DiscoveryMechanism.Type.EDS, EDS_SERVICE_NAME,
-        null, LRS_SERVER_INFO, 100L, upstreamTlsContext, outlierDetection);
   }
 
   @Test
@@ -635,7 +473,7 @@ public class CdsLoadBalancer2Test {
         eq(ConnectivityState.TRANSIENT_FAILURE), pickerCaptor.capture());
     Status expectedError = Status.UNAVAILABLE.withDescription(
         "Unable to load CDS cluster-foo.googleapis.com. xDS server returned: "
-        + "RESOURCE_EXHAUSTED: OOM xDS node ID: " + NODE_ID);
+        + "RESOURCE_EXHAUSTED: OOM");
     assertPicker(pickerCaptor.getValue(), expectedError, null);
     assertThat(childBalancers).isEmpty();
   }
@@ -665,8 +503,7 @@ public class CdsLoadBalancer2Test {
 
   @Test
   public void handleNameResolutionErrorFromUpstream_beforeChildLbCreated_returnErrorPicker() {
-    Status upstreamError = Status.UNAVAILABLE.withDescription(
-        "unreachable xDS node ID: " + NODE_ID);
+    Status upstreamError = Status.UNAVAILABLE.withDescription("unreachable");
     loadBalancer.handleNameResolutionError(upstreamError);
     verify(helper).updateBalancingState(
         eq(ConnectivityState.TRANSIENT_FAILURE), pickerCaptor.capture());
@@ -693,9 +530,9 @@ public class CdsLoadBalancer2Test {
       xdsClient.deliverCdsUpdate(CLUSTER,
           CdsUpdate.forEds(CLUSTER, EDS_SERVICE_NAME, LRS_SERVER_INFO, 100L, upstreamTlsContext,
                   outlierDetection)
-              .lbPolicyConfig(ImmutableMap.of("unknownLb", ImmutableMap.of("foo", "bar"))).build());
+              .lbPolicyConfig(ImmutableMap.of("unknown", ImmutableMap.of("foo", "bar"))).build());
     } catch (Exception e) {
-      assertThat(e).hasMessageThat().contains("unknownLb");
+      assertThat(e).hasCauseThat().hasMessageThat().contains("No provider available");
       return;
     }
     fail("Expected the unknown LB to cause an exception");
@@ -710,10 +547,10 @@ public class CdsLoadBalancer2Test {
                   ImmutableMap.of("ring_hash_experimental", ImmutableMap.of("minRingSize", "-1")))
               .build());
     } catch (Exception e) {
-      assertThat(e).hasMessageThat().contains("Unable to parse");
+      assertThat(e).hasCauseThat().hasMessageThat().contains("Unable to parse");
       return;
     }
-    fail("Expected the invalid config to cause an exception");
+    fail("Expected the invalid config to casue an exception");
   }
 
   private static void assertPicker(SubchannelPicker picker, Status expectedStatus,
@@ -813,57 +650,44 @@ public class CdsLoadBalancer2Test {
     }
   }
 
-  private static final class FakeXdsClient extends XdsClient {
-    // watchers needs to support any non-cyclic shaped graphs
-    private final Map<String, List<ResourceWatcher<CdsUpdate>>> watchers = new HashMap<>();
+  private final class FakeXdsClient extends XdsClient {
+    private final Map<String, ResourceWatcher<CdsUpdate>> watchers = new HashMap<>();
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T extends ResourceUpdate> void watchXdsResource(XdsResourceType<T> type,
-        String resourceName,
-        ResourceWatcher<T> watcher, Executor syncContext) {
+    <T extends ResourceUpdate> void watchXdsResource(XdsResourceType<T> type, String resourceName,
+                          ResourceWatcher<T> watcher) {
       assertThat(type.typeName()).isEqualTo("CDS");
-      watchers.computeIfAbsent(resourceName, k -> new ArrayList<>())
-          .add((ResourceWatcher<CdsUpdate>)watcher);
+      assertThat(watchers).doesNotContainKey(resourceName);
+      watchers.put(resourceName, (ResourceWatcher<CdsUpdate>)watcher);
     }
 
     @Override
-    public <T extends ResourceUpdate> void cancelXdsResourceWatch(XdsResourceType<T> type,
-                                                                  String resourceName,
-                                                                  ResourceWatcher<T> watcher) {
+    @SuppressWarnings("unchecked")
+    <T extends ResourceUpdate> void cancelXdsResourceWatch(XdsResourceType<T> type,
+                                                           String resourceName,
+                                                           ResourceWatcher<T> watcher) {
       assertThat(type.typeName()).isEqualTo("CDS");
       assertThat(watchers).containsKey(resourceName);
-      List<ResourceWatcher<CdsUpdate>> watcherList = watchers.get(resourceName);
-      assertThat(watcherList.remove(watcher)).isTrue();
-      if (watcherList.isEmpty()) {
-        watchers.remove(resourceName);
-      }
-    }
-
-    @Override
-    public BootstrapInfo getBootstrapInfo() {
-      return BOOTSTRAP_INFO;
+      watchers.remove(resourceName);
     }
 
     private void deliverCdsUpdate(String clusterName, CdsUpdate update) {
       if (watchers.containsKey(clusterName)) {
-        List<ResourceWatcher<CdsUpdate>> resourceWatchers =
-            ImmutableList.copyOf(watchers.get(clusterName));
-        resourceWatchers.forEach(w -> w.onChanged(update));
+        watchers.get(clusterName).onChanged(update);
       }
     }
 
     private void deliverResourceNotExist(String clusterName)  {
       if (watchers.containsKey(clusterName)) {
-        ImmutableList.copyOf(watchers.get(clusterName))
-            .forEach(w -> w.onResourceDoesNotExist(clusterName));
+        watchers.get(clusterName).onResourceDoesNotExist(clusterName);
       }
     }
 
     private void deliverError(Status error) {
-      watchers.values().stream()
-          .flatMap(List::stream)
-          .forEach(w -> w.onError(error));
+      for (ResourceWatcher<CdsUpdate> watcher : watchers.values()) {
+        watcher.onError(error);
+      }
     }
   }
 }

@@ -41,7 +41,6 @@ import io.grpc.MethodDescriptor;
 import io.grpc.SecurityLevel;
 import io.grpc.ServerCall;
 import io.grpc.Status;
-import io.grpc.StatusRuntimeException;
 import io.perfmark.PerfMark;
 import io.perfmark.Tag;
 import io.perfmark.TaskCloseable;
@@ -142,7 +141,7 @@ final class ServerCallImpl<ReqT, RespT> extends ServerCall<ReqT, RespT> {
     // Don't check if sendMessage has been called, since it requires that sendHeaders was already
     // called.
     sendHeadersCalled = true;
-    stream.writeHeaders(headers, !getMethodDescriptor().getType().serverSendsOneMessage());
+    stream.writeHeaders(headers);
   }
 
   @Override
@@ -158,7 +157,7 @@ final class ServerCallImpl<ReqT, RespT> extends ServerCall<ReqT, RespT> {
     checkState(!closeCalled, "call is closed");
 
     if (method.getType().serverSendsOneMessage() && messageSent) {
-      handleInternalError(Status.INTERNAL.withDescription(TOO_MANY_RESPONSES).asRuntimeException());
+      internalClose(Status.INTERNAL.withDescription(TOO_MANY_RESPONSES));
       return;
     }
 
@@ -170,7 +169,7 @@ final class ServerCallImpl<ReqT, RespT> extends ServerCall<ReqT, RespT> {
         stream.flush();
       }
     } catch (RuntimeException e) {
-      handleInternalError(e);
+      close(Status.fromThrowable(e), new Metadata());
     } catch (Error e) {
       close(
           Status.CANCELLED.withDescription("Server sendMessage() failed with Error"),
@@ -182,11 +181,6 @@ final class ServerCallImpl<ReqT, RespT> extends ServerCall<ReqT, RespT> {
   @Override
   public void setMessageCompression(boolean enable) {
     stream.setMessageCompression(enable);
-  }
-
-  @Override
-  public void setOnReadyThreshold(int numBytes) {
-    stream.setOnReadyThreshold(numBytes);
   }
 
   @Override
@@ -220,7 +214,7 @@ final class ServerCallImpl<ReqT, RespT> extends ServerCall<ReqT, RespT> {
       closeCalled = true;
 
       if (status.isOk() && method.getType().serverSendsOneMessage() && !messageSent) {
-        handleInternalError(Status.INTERNAL.withDescription(MISSING_RESPONSE).asRuntimeException());
+        internalClose(Status.INTERNAL.withDescription(MISSING_RESPONSE));
         return;
       }
 
@@ -269,14 +263,10 @@ final class ServerCallImpl<ReqT, RespT> extends ServerCall<ReqT, RespT> {
    * run until completion, but silently ignore interactions with the {@link ServerStream} from now
    * on.
    */
-  private void handleInternalError(Throwable internalError) {
-    log.log(Level.WARNING, "Cancelling the stream because of internal error", internalError);
-    Status status = (internalError instanceof StatusRuntimeException)
-        ? ((StatusRuntimeException) internalError).getStatus()
-        : Status.INTERNAL.withCause(internalError)
-            .withDescription("Internal error so cancelling stream.");
-    stream.cancel(status);
-    serverCallTracer.reportCallEnded(false); // error so always false
+  private void internalClose(Status internalError) {
+    log.log(Level.WARNING, "Cancelling the stream with status {0}", new Object[] {internalError});
+    stream.cancel(internalError);
+    serverCallTracer.reportCallEnded(internalError.isOk()); // error so always false
   }
 
   /**

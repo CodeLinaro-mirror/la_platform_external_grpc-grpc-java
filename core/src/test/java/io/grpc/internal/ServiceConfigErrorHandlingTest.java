@@ -45,11 +45,9 @@ import io.grpc.LoadBalancerProvider;
 import io.grpc.LoadBalancerRegistry;
 import io.grpc.NameResolver;
 import io.grpc.NameResolver.ConfigOrError;
-import io.grpc.NameResolverProvider;
 import io.grpc.Status;
 import io.grpc.internal.ManagedChannelImplBuilder.FixedPortProvider;
 import io.grpc.internal.ManagedChannelImplBuilder.UnsupportedClientTransportFactoryBuilder;
-import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.URI;
 import java.util.ArrayList;
@@ -160,16 +158,10 @@ public class ServiceConfigErrorHandlingTest {
   private void createChannel(ClientInterceptor... interceptors) {
     checkState(channel == null);
 
-    when(mockTransportFactory.getSupportedSocketAddressTypes()).thenReturn(Collections.singleton(
-        InetSocketAddress.class));
-    NameResolverProvider nameResolverProvider =
-        channelBuilder.nameResolverRegistry.getProviderForScheme(expectedUri.getScheme());
     channel =
         new ManagedChannelImpl(
             channelBuilder,
             mockTransportFactory,
-            expectedUri,
-            nameResolverProvider,
             new FakeBackoffPolicyProvider(),
             balancerRpcExecutorPool,
             timer.getStopwatchSupplier(),
@@ -200,7 +192,7 @@ public class ServiceConfigErrorHandlingTest {
 
   @Before
   public void setUp() throws Exception {
-    mockLoadBalancer.setAddressAcceptanceStatus(Status.OK);
+    mockLoadBalancer.setAcceptAddresses(true);
     LoadBalancerRegistry.getDefaultRegistry().register(mockLoadBalancerProvider);
     expectedUri = new URI(TARGET);
     when(mockTransportFactory.getScheduledExecutorService())
@@ -282,13 +274,13 @@ public class ServiceConfigErrorHandlingTest {
     assertThat(resolvedAddresses.getLoadBalancingPolicyConfig()).isEqualTo("12");
     verify(mockLoadBalancer, never()).handleNameResolutionError(any(Status.class));
 
-    assertThat(channel.getState(true)).isEqualTo(ConnectivityState.CONNECTING);
+    assertThat(channel.getState(true)).isEqualTo(ConnectivityState.IDLE);
 
     reset(mockLoadBalancer);
     nameResolverFactory.servers.clear();
 
     // 2nd resolution
-    mockLoadBalancer.setAddressAcceptanceStatus(Status.UNAVAILABLE);
+    mockLoadBalancer.setAcceptAddresses(false);
     nameResolverFactory.allResolved();
 
     // 2nd service config without addresses
@@ -485,7 +477,7 @@ public class ServiceConfigErrorHandlingTest {
     assertThat(newResolvedAddress.getLoadBalancingPolicyConfig()).isEqualTo("1st raw config");
     assertThat(channel.getConfigSelector()).isSameInstanceAs(configSelector);
     verify(mockLoadBalancer, never()).handleNameResolutionError(any(Status.class));
-    assertThat(channel.getState(false)).isEqualTo(ConnectivityState.CONNECTING);
+    assertThat(channel.getState(false)).isEqualTo(ConnectivityState.IDLE);
   }
 
   @Test
@@ -550,7 +542,7 @@ public class ServiceConfigErrorHandlingTest {
     final URI expectedUri;
     final List<EquivalentAddressGroup> servers;
     final boolean resolvedAtStart;
-    final ArrayList<FakeNameResolver> resolvers = new ArrayList<>();
+    final ArrayList<RetryingNameResolver> resolvers = new ArrayList<>();
     final AtomicReference<Map<String, ?>> nextRawServiceConfig = new AtomicReference<>();
     final AtomicReference<Attributes> nextAttributes = new AtomicReference<>(Attributes.EMPTY);
 
@@ -569,7 +561,13 @@ public class ServiceConfigErrorHandlingTest {
         return null;
       }
       assertEquals(DEFAULT_PORT, args.getDefaultPort());
-      FakeNameResolver resolver = new FakeNameResolver(args.getServiceConfigParser());
+      RetryingNameResolver resolver = new RetryingNameResolver(
+          new FakeNameResolver(args.getServiceConfigParser()),
+          new BackoffPolicyRetryScheduler(
+              new FakeBackoffPolicyProvider(),
+              args.getScheduledExecutorService(),
+              args.getSynchronizationContext()),
+          args.getSynchronizationContext());
       resolvers.add(resolver);
       return resolver;
     }
@@ -580,8 +578,8 @@ public class ServiceConfigErrorHandlingTest {
     }
 
     void allResolved() {
-      for (FakeNameResolver resolver : resolvers) {
-        resolver.resolved();
+      for (RetryingNameResolver resolver : resolvers) {
+        ((FakeNameResolver)resolver.getRetriedNameResolver()).resolved();
       }
     }
 
@@ -657,7 +655,7 @@ public class ServiceConfigErrorHandlingTest {
 
   private static class FakeLoadBalancer extends LoadBalancer {
 
-    private Status addressAcceptanceStatus = Status.OK;
+    private boolean acceptAddresses = true;
 
     @Nullable
     private Helper helper;
@@ -667,12 +665,12 @@ public class ServiceConfigErrorHandlingTest {
     }
 
     @Override
-    public Status acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
-      return addressAcceptanceStatus;
+    public boolean acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
+      return acceptAddresses;
     }
 
-    public void setAddressAcceptanceStatus(Status addressAcceptanceStatus) {
-      this.addressAcceptanceStatus = addressAcceptanceStatus;
+    public void setAcceptAddresses(boolean acceptAddresses) {
+      this.acceptAddresses = acceptAddresses;
     }
 
     @Override

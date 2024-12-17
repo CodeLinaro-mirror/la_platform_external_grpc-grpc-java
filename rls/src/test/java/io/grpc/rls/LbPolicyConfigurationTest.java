@@ -36,7 +36,6 @@ import io.grpc.LoadBalancer.SubchannelPicker;
 import io.grpc.LoadBalancerProvider;
 import io.grpc.LoadBalancerRegistry;
 import io.grpc.NameResolver.ConfigOrError;
-import io.grpc.Status;
 import io.grpc.SynchronizationContext;
 import io.grpc.rls.ChildLoadBalancerHelper.ChildLoadBalancerHelperProvider;
 import io.grpc.rls.LbPolicyConfiguration.ChildLbStatusListener;
@@ -96,7 +95,6 @@ public class LbPolicyConfigurationTest {
     doReturn(lb).when(lbProvider).newLoadBalancer(any(Helper.class));
     doReturn(ConfigOrError.fromConfig(new Object()))
         .when(lbProvider).parseLoadBalancingPolicyConfig(ArgumentMatchers.<Map<String, ?>>any());
-    doReturn(Status.OK).when(lb).acceptResolvedAddresses(any(ResolvedAddresses.class));
   }
 
   @Test
@@ -125,7 +123,7 @@ public class LbPolicyConfigurationTest {
 
   @Test
   public void childPolicyWrapper_addressesRejected() {
-    when(lb.acceptResolvedAddresses(any(ResolvedAddresses.class))).thenReturn(Status.UNAVAILABLE);
+    when(lb.acceptResolvedAddresses(any(ResolvedAddresses.class))).thenReturn(false);
     factory.createOrGet("target");
     verify(helper).refreshNameResolution();
   }

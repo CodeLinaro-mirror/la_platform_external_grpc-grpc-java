@@ -120,8 +120,7 @@ public final class OrcaMetricReportingServerInterceptor implements ServerInterce
         .setRpsFractional(internalReport.getQps())
         .setEps(internalReport.getEps())
         .putAllUtilization(internalReport.getUtilizationMetrics())
-        .putAllRequestCost(internalReport.getRequestCostMetrics())
-        .putAllNamedMetrics(internalReport.getNamedMetrics());
+        .putAllRequestCost(internalReport.getRequestCostMetrics());
   }
 
   /**
@@ -134,8 +133,7 @@ public final class OrcaMetricReportingServerInterceptor implements ServerInterce
       MetricReport callMetricRecorderReport
   ) {
     metricRecorderReportBuilder.putAllUtilization(callMetricRecorderReport.getUtilizationMetrics())
-        .putAllRequestCost(callMetricRecorderReport.getRequestCostMetrics())
-        .putAllNamedMetrics(callMetricRecorderReport.getNamedMetrics());
+        .putAllRequestCost(callMetricRecorderReport.getRequestCostMetrics());
     // Overwrite only if the values from the given MetricReport for CallMetricRecorder are set
     double cpu = callMetricRecorderReport.getCpuUtilization();
     if (isReportValueSet(cpu)) {

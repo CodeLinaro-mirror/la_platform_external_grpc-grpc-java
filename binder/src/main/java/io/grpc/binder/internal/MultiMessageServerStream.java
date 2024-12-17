@@ -65,11 +65,6 @@ final class MultiMessageServerStream implements ServerStream {
   }
 
   @Override
-  public void setOnReadyThreshold(int numBytes) {
-    // No-op
-  }
-
-  @Override
   public boolean isReady() {
     return outbound.isReady();
   }
@@ -82,7 +77,7 @@ final class MultiMessageServerStream implements ServerStream {
   }
 
   @Override
-  public void writeHeaders(Metadata headers, boolean flush) {
+  public void writeHeaders(Metadata headers) {
     try {
       synchronized (outbound) {
         outbound.sendHeaders(headers);

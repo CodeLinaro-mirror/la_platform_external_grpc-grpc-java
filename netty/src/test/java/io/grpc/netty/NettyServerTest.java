@@ -133,35 +133,28 @@ public class NettyServerTest {
     }
 
     NoHandlerProtocolNegotiator protocolNegotiator = new NoHandlerProtocolNegotiator();
-    NettyServer ns =
-        new NettyServer(
-            Arrays.asList(addr),
-            new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
-            new HashMap<ChannelOption<?>, Object>(),
-            new HashMap<ChannelOption<?>, Object>(),
-            new FixedObjectPool<>(eventLoop),
-            new FixedObjectPool<>(eventLoop),
-            false,
-            protocolNegotiator,
-            Collections.<ServerStreamTracer.Factory>emptyList(),
-            TransportTracer.getDefaultFactory(),
-            1, // ignore
-            false, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1,
-            1, // ignore
-            1,
-            1, // ignore
-            true,
-            0, // ignore
-            0,
-            0, // ignore
-            Attributes.EMPTY,
-            channelz);
+    NettyServer ns = new NettyServer(
+        Arrays.asList(addr),
+        new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
+        new HashMap<ChannelOption<?>, Object>(),
+        new HashMap<ChannelOption<?>, Object>(),
+        new FixedObjectPool<>(eventLoop),
+        new FixedObjectPool<>(eventLoop),
+        false,
+        protocolNegotiator,
+        Collections.<ServerStreamTracer.Factory>emptyList(),
+        TransportTracer.getDefaultFactory(),
+        1, // ignore
+        false, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, 1, // ignore
+        1, 1, // ignore
+        true, 0, // ignore
+        Attributes.EMPTY,
+        channelz);
     final SettableFuture<Void> serverShutdownCalled = SettableFuture.create();
     ns.start(new ServerListener() {
       @Override
@@ -190,35 +183,28 @@ public class NettyServerTest {
     InetSocketAddress addr1 = new InetSocketAddress(0);
     InetSocketAddress addr2 = new InetSocketAddress(0);
 
-    NettyServer ns =
-        new NettyServer(
-            Arrays.asList(addr1, addr2),
-            new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
-            new HashMap<ChannelOption<?>, Object>(),
-            new HashMap<ChannelOption<?>, Object>(),
-            new FixedObjectPool<>(eventLoop),
-            new FixedObjectPool<>(eventLoop),
-            false,
-            ProtocolNegotiators.plaintext(),
-            Collections.<ServerStreamTracer.Factory>emptyList(),
-            TransportTracer.getDefaultFactory(),
-            1, // ignore
-            false, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1,
-            1, // ignore
-            1,
-            1, // ignore
-            true,
-            0, // ignore
-            0,
-            0, // ignore
-            Attributes.EMPTY,
-            channelz);
+    NettyServer ns = new NettyServer(
+        Arrays.asList(addr1, addr2),
+        new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
+        new HashMap<ChannelOption<?>, Object>(),
+        new HashMap<ChannelOption<?>, Object>(),
+        new FixedObjectPool<>(eventLoop),
+        new FixedObjectPool<>(eventLoop),
+        false,
+        ProtocolNegotiators.plaintext(),
+        Collections.<ServerStreamTracer.Factory>emptyList(),
+        TransportTracer.getDefaultFactory(),
+        1, // ignore
+        false, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, 1, // ignore
+        1, 1, // ignore
+        true, 0, // ignore
+        Attributes.EMPTY,
+        channelz);
     final SettableFuture<Void> shutdownCompleted = SettableFuture.create();
     ns.start(new ServerListener() {
       @Override
@@ -270,35 +256,28 @@ public class NettyServerTest {
     InetSocketAddress addr2 = new InetSocketAddress(0);
     final CountDownLatch allPortsConnectedCountDown = new CountDownLatch(2);
 
-    NettyServer ns =
-        new NettyServer(
-            Arrays.asList(addr1, addr2),
-            new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
-            new HashMap<ChannelOption<?>, Object>(),
-            new HashMap<ChannelOption<?>, Object>(),
-            new FixedObjectPool<>(eventLoop),
-            new FixedObjectPool<>(eventLoop),
-            false,
-            ProtocolNegotiators.plaintext(),
-            Collections.<ServerStreamTracer.Factory>emptyList(),
-            TransportTracer.getDefaultFactory(),
-            1, // ignore
-            false, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1,
-            1, // ignore
-            1,
-            1, // ignore
-            true,
-            0, // ignore
-            0,
-            0, // ignore
-            Attributes.EMPTY,
-            channelz);
+    NettyServer ns = new NettyServer(
+        Arrays.asList(addr1, addr2),
+        new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
+        new HashMap<ChannelOption<?>, Object>(),
+        new HashMap<ChannelOption<?>, Object>(),
+        new FixedObjectPool<>(eventLoop),
+        new FixedObjectPool<>(eventLoop),
+        false,
+        ProtocolNegotiators.plaintext(),
+        Collections.<ServerStreamTracer.Factory>emptyList(),
+        TransportTracer.getDefaultFactory(),
+        1, // ignore
+        false, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, 1, // ignore
+        1, 1, // ignore
+        true, 0, // ignore
+        Attributes.EMPTY,
+        channelz);
     final SettableFuture<Void> shutdownCompleted = SettableFuture.create();
     ns.start(new ServerListener() {
       @Override
@@ -338,35 +317,28 @@ public class NettyServerTest {
   public void getPort_notStarted() {
     InetSocketAddress addr = new InetSocketAddress(0);
     List<InetSocketAddress> addresses = Collections.singletonList(addr);
-    NettyServer ns =
-        new NettyServer(
-            addresses,
-            new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
-            new HashMap<ChannelOption<?>, Object>(),
-            new HashMap<ChannelOption<?>, Object>(),
-            new FixedObjectPool<>(eventLoop),
-            new FixedObjectPool<>(eventLoop),
-            false,
-            ProtocolNegotiators.plaintext(),
-            Collections.<ServerStreamTracer.Factory>emptyList(),
-            TransportTracer.getDefaultFactory(),
-            1, // ignore
-            false, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1,
-            1, // ignore
-            1,
-            1, // ignore
-            true,
-            0, // ignore
-            0,
-            0, // ignore
-            Attributes.EMPTY,
-            channelz);
+    NettyServer ns = new NettyServer(
+        addresses,
+        new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
+        new HashMap<ChannelOption<?>, Object>(),
+        new HashMap<ChannelOption<?>, Object>(),
+        new FixedObjectPool<>(eventLoop),
+        new FixedObjectPool<>(eventLoop),
+        false,
+        ProtocolNegotiators.plaintext(),
+        Collections.<ServerStreamTracer.Factory>emptyList(),
+        TransportTracer.getDefaultFactory(),
+        1, // ignore
+        false, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, 1, // ignore
+        1, 1, // ignore
+        true, 0, // ignore
+        Attributes.EMPTY,
+        channelz);
 
     assertThat(ns.getListenSocketAddress()).isEqualTo(addr);
     assertThat(ns.getListenSocketAddresses()).isEqualTo(addresses);
@@ -419,35 +391,28 @@ public class NettyServerTest {
         .build();
     TestProtocolNegotiator protocolNegotiator = new TestProtocolNegotiator();
     InetSocketAddress addr = new InetSocketAddress(0);
-    NettyServer ns =
-        new NettyServer(
-            Arrays.asList(addr),
-            new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
-            new HashMap<ChannelOption<?>, Object>(),
-            childChannelOptions,
-            new FixedObjectPool<>(eventLoop),
-            new FixedObjectPool<>(eventLoop),
-            false,
-            protocolNegotiator,
-            Collections.<ServerStreamTracer.Factory>emptyList(),
-            TransportTracer.getDefaultFactory(),
-            1, // ignore
-            false, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1,
-            1, // ignore
-            1,
-            1, // ignore
-            true,
-            0, // ignore
-            0,
-            0, // ignore
-            eagAttributes,
-            channelz);
+    NettyServer ns = new NettyServer(
+        Arrays.asList(addr),
+        new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
+        new HashMap<ChannelOption<?>, Object>(),
+        childChannelOptions,
+        new FixedObjectPool<>(eventLoop),
+        new FixedObjectPool<>(eventLoop),
+        false,
+        protocolNegotiator,
+        Collections.<ServerStreamTracer.Factory>emptyList(),
+        TransportTracer.getDefaultFactory(),
+        1, // ignore
+        false, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, 1, // ignore
+        1, 1, // ignore
+        true, 0, // ignore
+        eagAttributes,
+        channelz);
     ns.start(new ServerListener() {
       @Override
       public ServerTransportListener transportCreated(ServerTransport transport) {
@@ -473,35 +438,28 @@ public class NettyServerTest {
   @Test
   public void channelzListenSocket() throws Exception {
     InetSocketAddress addr = new InetSocketAddress(0);
-    NettyServer ns =
-        new NettyServer(
-            Arrays.asList(addr),
-            new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
-            new HashMap<ChannelOption<?>, Object>(),
-            new HashMap<ChannelOption<?>, Object>(),
-            new FixedObjectPool<>(eventLoop),
-            new FixedObjectPool<>(eventLoop),
-            false,
-            ProtocolNegotiators.plaintext(),
-            Collections.<ServerStreamTracer.Factory>emptyList(),
-            TransportTracer.getDefaultFactory(),
-            1, // ignore
-            false, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1, // ignore
-            1,
-            1, // ignore
-            1,
-            1, // ignore
-            true,
-            0, // ignore
-            0,
-            0, // ignore
-            Attributes.EMPTY,
-            channelz);
+    NettyServer ns = new NettyServer(
+        Arrays.asList(addr),
+        new ReflectiveChannelFactory<>(NioServerSocketChannel.class),
+        new HashMap<ChannelOption<?>, Object>(),
+        new HashMap<ChannelOption<?>, Object>(),
+        new FixedObjectPool<>(eventLoop),
+        new FixedObjectPool<>(eventLoop),
+        false,
+        ProtocolNegotiators.plaintext(),
+        Collections.<ServerStreamTracer.Factory>emptyList(),
+        TransportTracer.getDefaultFactory(),
+        1, // ignore
+        false, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, // ignore
+        1, 1, // ignore
+        1, 1, // ignore
+        true, 0, // ignore
+        Attributes.EMPTY,
+        channelz);
     final SettableFuture<Void> shutdownCompleted = SettableFuture.create();
     ns.start(new ServerListener() {
       @Override
@@ -639,15 +597,9 @@ public class NettyServerTest {
         1, // ignore
         1, // ignore
         1, // ignore
-        1, // ignore
-        1,
-        1, // ignore
-        1,
-        1, // ignore
-        true,
-        0, // ignore
-        0,
-        0, // ignore
+        1, 1, // ignore
+        1, 1, // ignore
+        true, 0, // ignore
         Attributes.EMPTY,
         channelz);
   }

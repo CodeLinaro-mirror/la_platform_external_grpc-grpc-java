@@ -31,6 +31,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
+import com.google.common.base.Charsets;
 import com.google.common.io.ByteStreams;
 import com.google.common.primitives.Bytes;
 import io.grpc.Codec;
@@ -45,7 +46,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -133,7 +133,7 @@ public class MessageDeframerTest {
       assertEquals(Bytes.asList(new byte[]{3, 14}), bytes(producer.getValue().next()));
       verify(listener, atLeastOnce()).bytesRead(anyInt());
       verifyNoMoreInteractions(listener);
-      checkStats(tracer, transportTracer.getStats(), fakeClock, useGzipInflatingBuffer, 2, 2);
+      checkStats(tracer, transportTracer.getStats(), fakeClock, 2, 2);
     }
 
     @Test
@@ -148,7 +148,7 @@ public class MessageDeframerTest {
       verify(listener, atLeastOnce()).bytesRead(anyInt());
       assertEquals(Bytes.asList(new byte[]{14, 15}), bytes(streams.get(1).next()));
       verifyNoMoreInteractions(listener);
-      checkStats(tracer, transportTracer.getStats(), fakeClock, useGzipInflatingBuffer, 1, 1, 2, 2);
+      checkStats(tracer, transportTracer.getStats(), fakeClock, 1, 1, 2, 2);
     }
 
     @Test
@@ -162,7 +162,7 @@ public class MessageDeframerTest {
       verify(listener).deframerClosed(false);
       verify(listener, atLeastOnce()).bytesRead(anyInt());
       verifyNoMoreInteractions(listener);
-      checkStats(tracer, transportTracer.getStats(), fakeClock,  useGzipInflatingBuffer, 1, 1);
+      checkStats(tracer, transportTracer.getStats(), fakeClock, 1, 1);
     }
 
     @Test
@@ -177,7 +177,7 @@ public class MessageDeframerTest {
       }
       verify(listener).deframerClosed(false);
       verifyNoMoreInteractions(listener);
-      checkStats(tracer, transportTracer.getStats(), fakeClock, false);
+      checkStats(tracer, transportTracer.getStats(), fakeClock);
     }
 
     @Test
@@ -189,7 +189,7 @@ public class MessageDeframerTest {
       verify(listener, atLeastOnce()).bytesRead(anyInt());
       verify(listener).deframerClosed(true);
       verifyNoMoreInteractions(listener);
-      checkStats(tracer, transportTracer.getStats(), fakeClock, false);
+      checkStats(tracer, transportTracer.getStats(), fakeClock);
     }
 
     @Test
@@ -206,7 +206,7 @@ public class MessageDeframerTest {
       deframer.closeWhenComplete();
       verify(listener).deframerClosed(true);
       verifyNoMoreInteractions(listener);
-      checkStats(tracer, transportTracer.getStats(), fakeClock, false);
+      checkStats(tracer, transportTracer.getStats(), fakeClock);
     }
 
     @Test
@@ -228,11 +228,10 @@ public class MessageDeframerTest {
             tracer,
             transportTracer.getStats(),
             fakeClock,
-            true,
             7 /* msg size */ + 2 /* second buffer adds two bytes of overhead in deflate block */,
             7);
       } else {
-        checkStats(tracer, transportTracer.getStats(), fakeClock, false, 7, 7);
+        checkStats(tracer, transportTracer.getStats(), fakeClock, 7, 7);
       }
     }
 
@@ -249,7 +248,7 @@ public class MessageDeframerTest {
       assertEquals(Bytes.asList(new byte[]{3}), bytes(producer.getValue().next()));
       verify(listener, atLeastOnce()).bytesRead(anyInt());
       verifyNoMoreInteractions(listener);
-      checkStats(tracer, transportTracer.getStats(), fakeClock, useGzipInflatingBuffer, 1, 1);
+      checkStats(tracer, transportTracer.getStats(), fakeClock, 1, 1);
     }
 
     @Test
@@ -260,7 +259,7 @@ public class MessageDeframerTest {
       assertEquals(Bytes.asList(), bytes(producer.getValue().next()));
       verify(listener, atLeastOnce()).bytesRead(anyInt());
       verifyNoMoreInteractions(listener);
-      checkStats(tracer, transportTracer.getStats(), fakeClock, useGzipInflatingBuffer, 0, 0);
+      checkStats(tracer, transportTracer.getStats(), fakeClock, 0, 0);
     }
 
     @Test
@@ -274,10 +273,9 @@ public class MessageDeframerTest {
       verify(listener, atLeastOnce()).bytesRead(anyInt());
       verifyNoMoreInteractions(listener);
       if (useGzipInflatingBuffer) {
-        checkStats(tracer, transportTracer.getStats(), fakeClock,true,
-            8 /* compressed size */, 1000);
+        checkStats(tracer, transportTracer.getStats(), fakeClock, 8 /* compressed size */, 1000);
       } else {
-        checkStats(tracer, transportTracer.getStats(), fakeClock, false, 1000, 1000);
+        checkStats(tracer, transportTracer.getStats(), fakeClock, 1000, 1000);
       }
     }
 
@@ -294,7 +292,7 @@ public class MessageDeframerTest {
       verify(listener).deframerClosed(false);
       verify(listener, atLeastOnce()).bytesRead(anyInt());
       verifyNoMoreInteractions(listener);
-      checkStats(tracer, transportTracer.getStats(), fakeClock, useGzipInflatingBuffer, 1, 1);
+      checkStats(tracer, transportTracer.getStats(), fakeClock, 1, 1);
     }
 
     @Test
@@ -310,7 +308,6 @@ public class MessageDeframerTest {
       verify(listener).messagesAvailable(producer.capture());
       assertEquals(Bytes.asList(new byte[1000]), bytes(producer.getValue().next()));
       verify(listener, atLeastOnce()).bytesRead(anyInt());
-      checkStats(tracer, transportTracer.getStats(), fakeClock, true, 29, 1000);
       verifyNoMoreInteractions(listener);
     }
 
@@ -350,7 +347,7 @@ public class MessageDeframerTest {
 
     @Test
     public void sizeEnforcingInputStream_readByteBelowLimit() throws IOException {
-      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(StandardCharsets.UTF_8));
+      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(Charsets.UTF_8));
       SizeEnforcingInputStream stream =
               new MessageDeframer.SizeEnforcingInputStream(in, 4, statsTraceCtx);
 
@@ -363,7 +360,7 @@ public class MessageDeframerTest {
 
     @Test
     public void sizeEnforcingInputStream_readByteAtLimit() throws IOException {
-      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(StandardCharsets.UTF_8));
+      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(Charsets.UTF_8));
       SizeEnforcingInputStream stream =
               new MessageDeframer.SizeEnforcingInputStream(in, 3, statsTraceCtx);
 
@@ -376,7 +373,7 @@ public class MessageDeframerTest {
 
     @Test
     public void sizeEnforcingInputStream_readByteAboveLimit() throws IOException {
-      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(StandardCharsets.UTF_8));
+      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(Charsets.UTF_8));
       SizeEnforcingInputStream stream =
               new MessageDeframer.SizeEnforcingInputStream(in, 2, statsTraceCtx);
 
@@ -393,7 +390,7 @@ public class MessageDeframerTest {
 
     @Test
     public void sizeEnforcingInputStream_readBelowLimit() throws IOException {
-      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(StandardCharsets.UTF_8));
+      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(Charsets.UTF_8));
       SizeEnforcingInputStream stream =
               new MessageDeframer.SizeEnforcingInputStream(in, 4, statsTraceCtx);
       byte[] buf = new byte[10];
@@ -407,7 +404,7 @@ public class MessageDeframerTest {
 
     @Test
     public void sizeEnforcingInputStream_readAtLimit() throws IOException {
-      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(StandardCharsets.UTF_8));
+      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(Charsets.UTF_8));
       SizeEnforcingInputStream stream =
               new MessageDeframer.SizeEnforcingInputStream(in, 3, statsTraceCtx);
       byte[] buf = new byte[10];
@@ -421,7 +418,7 @@ public class MessageDeframerTest {
 
     @Test
     public void sizeEnforcingInputStream_readAboveLimit() throws IOException {
-      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(StandardCharsets.UTF_8));
+      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(Charsets.UTF_8));
       SizeEnforcingInputStream stream =
               new MessageDeframer.SizeEnforcingInputStream(in, 2, statsTraceCtx);
       byte[] buf = new byte[10];
@@ -438,7 +435,7 @@ public class MessageDeframerTest {
 
     @Test
     public void sizeEnforcingInputStream_skipBelowLimit() throws IOException {
-      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(StandardCharsets.UTF_8));
+      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(Charsets.UTF_8));
       SizeEnforcingInputStream stream =
               new MessageDeframer.SizeEnforcingInputStream(in, 4, statsTraceCtx);
 
@@ -452,7 +449,7 @@ public class MessageDeframerTest {
 
     @Test
     public void sizeEnforcingInputStream_skipAtLimit() throws IOException {
-      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(StandardCharsets.UTF_8));
+      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(Charsets.UTF_8));
       SizeEnforcingInputStream stream =
               new MessageDeframer.SizeEnforcingInputStream(in, 3, statsTraceCtx);
 
@@ -465,7 +462,7 @@ public class MessageDeframerTest {
 
     @Test
     public void sizeEnforcingInputStream_skipAboveLimit() throws IOException {
-      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(StandardCharsets.UTF_8));
+      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(Charsets.UTF_8));
       SizeEnforcingInputStream stream =
               new MessageDeframer.SizeEnforcingInputStream(in, 2, statsTraceCtx);
 
@@ -481,7 +478,7 @@ public class MessageDeframerTest {
 
     @Test
     public void sizeEnforcingInputStream_markReset() throws IOException {
-      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(StandardCharsets.UTF_8));
+      ByteArrayInputStream in = new ByteArrayInputStream("foo".getBytes(Charsets.UTF_8));
       SizeEnforcingInputStream stream =
               new MessageDeframer.SizeEnforcingInputStream(in, 3, statsTraceCtx);
       // stream currently looks like: |foo
@@ -505,8 +502,7 @@ public class MessageDeframerTest {
    * @param sizes in the format {wire0, uncompressed0, wire1, uncompressed1, ...}
    */
   private static void checkStats(
-      TestBaseStreamTracer tracer, TransportStats transportStats, FakeClock clock,
-      boolean compressed, long... sizes) {
+      TestBaseStreamTracer tracer, TransportStats transportStats, FakeClock clock, long... sizes) {
     assertEquals(0, sizes.length % 2);
     int count = sizes.length / 2;
     long expectedWireSize = 0;
@@ -514,8 +510,7 @@ public class MessageDeframerTest {
     for (int i = 0; i < count; i++) {
       assertEquals("inboundMessage(" + i + ")", tracer.nextInboundEvent());
       assertEquals(
-          String.format(Locale.US, "inboundMessageRead(%d, %d, %d)", i, sizes[i * 2],
-              compressed ? -1 : sizes[i * 2 + 1]),
+          String.format(Locale.US, "inboundMessageRead(%d, %d, -1)", i, sizes[i * 2]),
           tracer.nextInboundEvent());
       expectedWireSize += sizes[i * 2];
       expectedUncompressedSize += sizes[i * 2 + 1];

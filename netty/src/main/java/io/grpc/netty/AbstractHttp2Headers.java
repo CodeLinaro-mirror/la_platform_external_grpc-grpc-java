@@ -37,7 +37,7 @@ abstract class AbstractHttp2Headers implements Http2Headers {
 
   @Override
   public boolean isEmpty() {
-    return size() == 0;
+    throw new UnsupportedOperationException();
   }
 
   @Override

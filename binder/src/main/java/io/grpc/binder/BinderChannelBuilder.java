@@ -20,16 +20,24 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
 import android.content.Context;
-import android.os.UserHandle;
-import androidx.annotation.RequiresApi;
+import androidx.core.content.ContextCompat;
 import com.google.errorprone.annotations.DoNotCall;
+import io.grpc.ChannelCredentials;
+import io.grpc.ChannelLogger;
 import io.grpc.ExperimentalApi;
 import io.grpc.ForwardingChannelBuilder;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.binder.internal.BinderClientTransportFactory;
+import io.grpc.binder.internal.BinderTransport;
+import io.grpc.internal.ClientTransportFactory;
+import io.grpc.internal.ConnectionClientTransport;
 import io.grpc.internal.FixedObjectPool;
+import io.grpc.internal.GrpcUtil;
 import io.grpc.internal.ManagedChannelImplBuilder;
+import io.grpc.internal.ManagedChannelImplBuilder.ClientTransportFactoryBuilder;
+import io.grpc.internal.ObjectPool;
+import io.grpc.internal.SharedResourcePool;
+import java.net.SocketAddress;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -42,7 +50,8 @@ import javax.annotation.Nullable;
  *     Services</a>
  */
 @ExperimentalApi("https://github.com/grpc/grpc-java/issues/8022")
-public final class BinderChannelBuilder extends ForwardingChannelBuilder<BinderChannelBuilder> {
+public final class BinderChannelBuilder
+    extends ForwardingChannelBuilder<BinderChannelBuilder> {
 
   /**
    * Creates a channel builder that will bind to a remote Android service.
@@ -62,42 +71,12 @@ public final class BinderChannelBuilder extends ForwardingChannelBuilder<BinderC
   public static BinderChannelBuilder forAddress(
       AndroidComponentAddress directAddress, Context sourceContext) {
     return new BinderChannelBuilder(
-        checkNotNull(directAddress, "directAddress"),
-        null,
-        sourceContext,
-        BinderChannelCredentials.forDefault());
+        checkNotNull(directAddress, "directAddress"), null, sourceContext);
   }
 
   /**
-   * Creates a channel builder that will bind to a remote Android service with provided
-   * BinderChannelCredentials.
-   *
-   * <p>The underlying Android binding will be torn down when the channel becomes idle. This happens
-   * after 30 minutes without use by default but can be configured via {@link
-   * ManagedChannelBuilder#idleTimeout(long, TimeUnit)} or triggered manually with {@link
-   * ManagedChannel#enterIdle()}.
-   *
-   * <p>You the caller are responsible for managing the lifecycle of any channels built by the
-   * resulting builder. They will not be shut down automatically.
-   *
-   * @param directAddress the {@link AndroidComponentAddress} referencing the service to bind to.
-   * @param sourceContext the context to bind from (e.g. The current Activity or Application).
-   * @param channelCredentials the arbitrary binder specific channel credentials to be used to
-   *     establish a binder connection.
-   * @return a new builder
-   */
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/10173")
-  public static BinderChannelBuilder forAddress(
-      AndroidComponentAddress directAddress,
-      Context sourceContext,
-      BinderChannelCredentials channelCredentials) {
-    return new BinderChannelBuilder(
-        checkNotNull(directAddress, "directAddress"), null, sourceContext, channelCredentials);
-  }
-
-  /**
-   * Creates a channel builder that will bind to a remote Android service, via a string target name
-   * which will be resolved.
+   * Creates a channel builder that will bind to a remote Android service, via a string
+   * target name which will be resolved.
    *
    * <p>The underlying Android binding will be torn down when the channel becomes idle. This happens
    * after 30 minutes without use by default but can be configured via {@link
@@ -108,49 +87,26 @@ public final class BinderChannelBuilder extends ForwardingChannelBuilder<BinderC
    * resulting builder. They will not be shut down automatically.
    *
    * @param target A target uri which should resolve into an {@link AndroidComponentAddress}
-   *     referencing the service to bind to.
+   * referencing the service to bind to.
    * @param sourceContext the context to bind from (e.g. The current Activity or Application).
    * @return a new builder
    */
   public static BinderChannelBuilder forTarget(String target, Context sourceContext) {
-    return new BinderChannelBuilder(
-        null, checkNotNull(target, "target"), sourceContext, BinderChannelCredentials.forDefault());
+    return new BinderChannelBuilder(null, checkNotNull(target, "target"), sourceContext);
   }
 
   /**
-   * Creates a channel builder that will bind to a remote Android service, via a string target name
-   * which will be resolved.
-   *
-   * <p>The underlying Android binding will be torn down when the channel becomes idle. This happens
-   * after 30 minutes without use by default but can be configured via {@link
-   * ManagedChannelBuilder#idleTimeout(long, TimeUnit)} or triggered manually with {@link
-   * ManagedChannel#enterIdle()}.
-   *
-   * <p>You the caller are responsible for managing the lifecycle of any channels built by the
-   * resulting builder. They will not be shut down automatically.
-   *
-   * @param target A target uri which should resolve into an {@link AndroidComponentAddress}
-   *     referencing the service to bind to.
-   * @param sourceContext the context to bind from (e.g. The current Activity or Application).
-   * @param channelCredentials the arbitrary binder specific channel credentials to be used to
-   *     establish a binder connection.
-   * @return a new builder
+   * Always fails. Call {@link #forAddress(AndroidComponentAddress, Context)} instead.
    */
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/10173")
-  public static BinderChannelBuilder forTarget(
-      String target, Context sourceContext, BinderChannelCredentials channelCredentials) {
-    return new BinderChannelBuilder(
-        null, checkNotNull(target, "target"), sourceContext, channelCredentials);
-  }
-
-  /** Always fails. Call {@link #forAddress(AndroidComponentAddress, Context)} instead. */
   @DoNotCall("Unsupported. Use forAddress(AndroidComponentAddress, Context) instead")
   public static BinderChannelBuilder forAddress(String name, int port) {
     throw new UnsupportedOperationException(
         "call forAddress(AndroidComponentAddress, Context) instead");
   }
 
-  /** Always fails. Call {@link #forAddress(AndroidComponentAddress, Context)} instead. */
+  /**
+   * Always fails. Call {@link #forAddress(AndroidComponentAddress, Context)} instead.
+   */
   @DoNotCall("Unsupported. Use forTarget(String, Context) instead")
   public static BinderChannelBuilder forTarget(String target) {
     throw new UnsupportedOperationException(
@@ -158,40 +114,65 @@ public final class BinderChannelBuilder extends ForwardingChannelBuilder<BinderC
   }
 
   private final ManagedChannelImplBuilder managedChannelImplBuilder;
-  private final BinderClientTransportFactory.Builder transportFactoryBuilder;
 
+  private Executor mainThreadExecutor;
+  private ObjectPool<ScheduledExecutorService> schedulerPool =
+      SharedResourcePool.forResource(GrpcUtil.TIMER_SERVICE);
+  private SecurityPolicy securityPolicy;
+  private InboundParcelablePolicy inboundParcelablePolicy;
+  private BindServiceFlags bindServiceFlags;
   private boolean strictLifecycleManagement;
 
   private BinderChannelBuilder(
       @Nullable AndroidComponentAddress directAddress,
       @Nullable String target,
-      Context sourceContext,
-      BinderChannelCredentials channelCredentials) {
-    transportFactoryBuilder =
-        new BinderClientTransportFactory.Builder()
-            .setSourceContext(sourceContext)
-            .setChannelCredentials(channelCredentials);
+      Context sourceContext) {
+    mainThreadExecutor =
+        ContextCompat.getMainExecutor(checkNotNull(sourceContext, "sourceContext"));
+    securityPolicy = SecurityPolicies.internalOnly();
+    inboundParcelablePolicy = InboundParcelablePolicy.DEFAULT;
+    bindServiceFlags = BindServiceFlags.DEFAULTS;
+
+    final class BinderChannelTransportFactoryBuilder
+        implements ClientTransportFactoryBuilder {
+      @Override
+      public ClientTransportFactory buildClientTransportFactory() {
+        return new TransportFactory(
+            sourceContext,
+            mainThreadExecutor,
+            schedulerPool,
+            managedChannelImplBuilder.getOffloadExecutorPool(),
+            securityPolicy,
+            bindServiceFlags,
+            inboundParcelablePolicy);
+      }
+    }
 
     if (directAddress != null) {
       managedChannelImplBuilder =
           new ManagedChannelImplBuilder(
-              directAddress, directAddress.getAuthority(), transportFactoryBuilder, null);
+              directAddress,
+              directAddress.getAuthority(),
+              new BinderChannelTransportFactoryBuilder(),
+              null);
     } else {
       managedChannelImplBuilder =
-          new ManagedChannelImplBuilder(target, transportFactoryBuilder, null);
+          new ManagedChannelImplBuilder(
+              target,
+              new BinderChannelTransportFactoryBuilder(),
+              null);
     }
     idleTimeout(60, TimeUnit.SECONDS);
   }
 
   @Override
-  @SuppressWarnings("deprecation") // Not extending ForwardingChannelBuilder2 to preserve ABI.
   protected ManagedChannelBuilder<?> delegate() {
     return managedChannelImplBuilder;
   }
 
   /** Specifies certain optional aspects of the underlying Android Service binding. */
   public BinderChannelBuilder setBindServiceFlags(BindServiceFlags bindServiceFlags) {
-    transportFactoryBuilder.setBindServiceFlags(bindServiceFlags);
+    this.bindServiceFlags = bindServiceFlags;
     return this;
   }
 
@@ -205,8 +186,8 @@ public final class BinderChannelBuilder extends ForwardingChannelBuilder<BinderC
    */
   public BinderChannelBuilder scheduledExecutorService(
       ScheduledExecutorService scheduledExecutorService) {
-    transportFactoryBuilder.setScheduledExecutorPool(
-        new FixedObjectPool<>(checkNotNull(scheduledExecutorService, "scheduledExecutorService")));
+   schedulerPool =
+        new FixedObjectPool<>(checkNotNull(scheduledExecutorService, "scheduledExecutorService"));
     return this;
   }
 
@@ -218,7 +199,7 @@ public final class BinderChannelBuilder extends ForwardingChannelBuilder<BinderC
    * @return this
    */
   public BinderChannelBuilder mainThreadExecutor(Executor mainThreadExecutor) {
-    transportFactoryBuilder.setMainThreadExecutor(mainThreadExecutor);
+    this.mainThreadExecutor = mainThreadExecutor;
     return this;
   }
 
@@ -231,47 +212,22 @@ public final class BinderChannelBuilder extends ForwardingChannelBuilder<BinderC
    * @return this
    */
   public BinderChannelBuilder securityPolicy(SecurityPolicy securityPolicy) {
-    transportFactoryBuilder.setSecurityPolicy(securityPolicy);
-    return this;
-  }
-
-  /**
-   * Specifies the {@link UserHandle} to be searched for the remote Android Service by default.
-   *
-   * <p>Used only as a fallback if the direct or resolved {@link AndroidComponentAddress} doesn't
-   * specify a {@link UserHandle}. If neither the Channel nor the {@link AndroidComponentAddress}
-   * specifies a target user, the {@link UserHandle} of the current process will be used.
-   *
-   * <p>Targeting a Service in a different Android user is uncommon and requires special permissions
-   * normally reserved for system apps. See {@link android.content.Context#bindServiceAsUser} for
-   * details.
-   *
-   * @deprecated This method's name is misleading because it implies an impersonated client identity
-   *     when it's actually specifying part of the server's location. It's also no longer necessary
-   *     since the target user is part of {@link AndroidComponentAddress}. Prefer to specify target
-   *     user in the address instead, either directly or via a {@link io.grpc.NameResolverProvider}.
-   * @param targetUserHandle the target user to bind into.
-   * @return this
-   */
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/10173")
-  @RequiresApi(30)
-  @Deprecated
-  public BinderChannelBuilder bindAsUser(UserHandle targetUserHandle) {
-    transportFactoryBuilder.setDefaultTargetUserHandle(targetUserHandle);
+    this.securityPolicy = checkNotNull(securityPolicy, "securityPolicy");
     return this;
   }
 
   /** Sets the policy for inbound parcelable objects. */
   public BinderChannelBuilder inboundParcelablePolicy(
       InboundParcelablePolicy inboundParcelablePolicy) {
-    transportFactoryBuilder.setInboundParcelablePolicy(inboundParcelablePolicy);
+    this.inboundParcelablePolicy = checkNotNull(inboundParcelablePolicy, "inboundParcelablePolicy");
     return this;
   }
 
-  /**
-   * Disables the channel idle timeout and prevents it from being enabled. This allows a centralized
-   * application method to configure the channel builder and return it, without worrying about
-   * another part of the application accidentally enabling the idle timeout.
+  /** 
+   * Disables the channel idle timeout and prevents it from being enabled. This
+   * allows a centralized application method to configure the channel builder
+   * and return it, without worrying about another part of the application
+   * accidentally enabling the idle timeout.
    */
   public BinderChannelBuilder strictLifecycleManagement() {
     strictLifecycleManagement = true;
@@ -281,17 +237,78 @@ public final class BinderChannelBuilder extends ForwardingChannelBuilder<BinderC
 
   @Override
   public BinderChannelBuilder idleTimeout(long value, TimeUnit unit) {
-    checkState(
-        !strictLifecycleManagement,
-        "Idle timeouts are not supported when strict lifecycle management is enabled");
+    checkState(!strictLifecycleManagement, "Idle timeouts are not supported when strict lifecycle management is enabled");
     super.idleTimeout(value, unit);
     return this;
   }
 
-  @Override
-  public ManagedChannel build() {
-    transportFactoryBuilder.setOffloadExecutorPool(
-        managedChannelImplBuilder.getOffloadExecutorPool());
-    return super.build();
+  /** Creates new binder transports. */
+  private static final class TransportFactory implements ClientTransportFactory {
+    private final Context sourceContext;
+    private final Executor mainThreadExecutor;
+    private final ObjectPool<ScheduledExecutorService> scheduledExecutorPool;
+    private final ObjectPool<? extends Executor> offloadExecutorPool;
+    private final SecurityPolicy securityPolicy;
+    private final InboundParcelablePolicy inboundParcelablePolicy;
+    private final BindServiceFlags bindServiceFlags;
+
+    private ScheduledExecutorService executorService;
+    private Executor offloadExecutor;
+    private boolean closed;
+
+    TransportFactory(
+        Context sourceContext,
+        Executor mainThreadExecutor,
+        ObjectPool<ScheduledExecutorService> scheduledExecutorPool,
+        ObjectPool<? extends Executor> offloadExecutorPool,
+        SecurityPolicy securityPolicy,
+        BindServiceFlags bindServiceFlags,
+        InboundParcelablePolicy inboundParcelablePolicy) {
+      this.sourceContext = sourceContext;
+      this.mainThreadExecutor = mainThreadExecutor;
+      this.scheduledExecutorPool = scheduledExecutorPool;
+      this.offloadExecutorPool = offloadExecutorPool;
+      this.securityPolicy = securityPolicy;
+      this.bindServiceFlags = bindServiceFlags;
+      this.inboundParcelablePolicy = inboundParcelablePolicy;
+
+      executorService = scheduledExecutorPool.getObject();
+      offloadExecutor = offloadExecutorPool.getObject();
+    }
+
+    @Override
+    public ConnectionClientTransport newClientTransport(
+        SocketAddress addr, ClientTransportOptions options, ChannelLogger channelLogger) {
+      if (closed) {
+        throw new IllegalStateException("The transport factory is closed.");
+      }
+      return new BinderTransport.BinderClientTransport(
+          sourceContext,
+          (AndroidComponentAddress) addr,
+          bindServiceFlags,
+          mainThreadExecutor,
+          scheduledExecutorPool,
+          offloadExecutorPool,
+          securityPolicy,
+          inboundParcelablePolicy,
+          options.getEagAttributes());
+    }
+
+    @Override
+    public ScheduledExecutorService getScheduledExecutorService() {
+      return executorService;
+    }
+
+    @Override
+    public SwapChannelCredentialsResult swapChannelCredentials(ChannelCredentials channelCreds) {
+      return null;
+    }
+
+    @Override
+    public void close() {
+      closed = true;
+      executorService = scheduledExecutorPool.returnObject(executorService);
+      offloadExecutor = offloadExecutorPool.returnObject(offloadExecutor);
+    }
   }
 }

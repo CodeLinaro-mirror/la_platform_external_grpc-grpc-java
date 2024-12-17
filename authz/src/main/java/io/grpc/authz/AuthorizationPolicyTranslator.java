@@ -33,7 +33,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -78,7 +77,7 @@ class AuthorizationPolicyTranslator {
     }
     if (key.charAt(0) == ':'
         || key.startsWith("grpc-")
-        || UNSUPPORTED_HEADERS.contains(key.toLowerCase(Locale.ROOT))) {
+        || UNSUPPORTED_HEADERS.contains(key.toLowerCase())) {
       throw new IllegalArgumentException(String.format("Unsupported \"key\" %s", key));
     }
     List<String> valuesList = JsonUtil.getListOfStrings(header, "values");

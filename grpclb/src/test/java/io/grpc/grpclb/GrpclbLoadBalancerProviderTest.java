@@ -18,7 +18,6 @@ package io.grpc.grpclb;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import io.grpc.LoadBalancerRegistry;
 import io.grpc.NameResolver.ConfigOrError;
 import io.grpc.Status;
 import io.grpc.grpclb.GrpclbState.Mode;
@@ -31,17 +30,6 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class GrpclbLoadBalancerProviderTest {
   private final GrpclbLoadBalancerProvider provider = new GrpclbLoadBalancerProvider();
-
-  @Test
-  public void provider_isRegistered() {
-    LoadBalancerRegistry registry = LoadBalancerRegistry.getDefaultRegistry();
-    assertThat(registry.getProvider("grpclb")).isInstanceOf(GrpclbLoadBalancerProvider.class);
-  }
-
-  @Test
-  public void provider_getPriority() {
-    assertThat(provider.getPriority()).isEqualTo(5);
-  }
 
   @Test
   public void retrieveModeFromLbConfig_pickFirst() throws Exception {

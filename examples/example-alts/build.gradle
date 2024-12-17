@@ -1,7 +1,8 @@
 plugins {
     // Provide convenience executables for trying out the examples.
     id 'application'
-    id 'com.google.protobuf' version '0.9.4'
+    // ASSUMES GRADLE 5.6 OR HIGHER. Use plugin version 0.8.10 with earlier gradle versions
+    id 'com.google.protobuf' version '0.8.17'
     // Generate IntelliJ IDEA's .idea & .iml project files
     id 'idea'
 }
@@ -14,18 +15,16 @@ repositories {
     mavenLocal()
 }
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
-}
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
 
 // IMPORTANT: You probably want the non-SNAPSHOT version of gRPC. Make sure you
 // are looking at a tagged version of the example and not "master"!
 
 // Feel free to delete the comment at the next line. It is just for safely
 // updating the version in our release process.
-def grpcVersion = '1.69.0' // CURRENT_GRPC_VERSION
-def protocVersion = '3.25.5'
+def grpcVersion = '1.56.1-SNAPSHOT' // CURRENT_GRPC_VERSION
+def protocVersion = '3.22.3'
 
 dependencies {
     // grpc-alts transitively depends on grpc-netty-shaded, grpc-protobuf, and grpc-stub
@@ -70,12 +69,8 @@ task helloWorldAltsClient(type: CreateStartScripts) {
     classpath = startScripts.classpath
 }
 
-application {
-    applicationDistribution.into('bin') {
-        from(helloWorldAltsServer)
-        from(helloWorldAltsClient)
-        filePermissions {
-            unix(0755)
-        }
-    }
+applicationDistribution.into('bin') {
+    from(helloWorldAltsServer)
+    from(helloWorldAltsClient)
+    fileMode = 0755
 }

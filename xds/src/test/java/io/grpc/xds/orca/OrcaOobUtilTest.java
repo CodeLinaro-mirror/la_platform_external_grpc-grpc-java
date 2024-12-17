@@ -153,7 +153,7 @@ public class OrcaOobUtilTest {
   }
 
   private static void assertLog(List<String> logs, String expectedLog) {
-    assertThat(logs).contains(expectedLog);
+    assertThat(logs).containsExactly(expectedLog);
     logs.clear();
   }
 

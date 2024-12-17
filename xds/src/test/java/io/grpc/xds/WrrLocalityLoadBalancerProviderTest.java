@@ -27,7 +27,6 @@ import io.grpc.LoadBalancer.Helper;
 import io.grpc.LoadBalancerProvider;
 import io.grpc.LoadBalancerRegistry;
 import io.grpc.NameResolver;
-import io.grpc.util.GracefulSwitchLoadBalancerAccessor;
 import io.grpc.xds.WrrLocalityLoadBalancer.WrrLocalityConfig;
 import java.util.Map;
 import org.junit.Test;
@@ -65,8 +64,6 @@ public class WrrLocalityLoadBalancerProviderTest {
     WrrLocalityLoadBalancerProvider provider = new WrrLocalityLoadBalancerProvider();
     NameResolver.ConfigOrError configOrError = provider.parseLoadBalancingPolicyConfig(rawConfig);
     WrrLocalityConfig config = (WrrLocalityConfig) configOrError.getConfig();
-    LoadBalancerProvider childProvider =
-        GracefulSwitchLoadBalancerAccessor.getChildProvider(config.childConfig);
-    assertThat(childProvider.getPolicyName()).isEqualTo("round_robin");
+    assertThat(config.childPolicy.getProvider().getPolicyName()).isEqualTo("round_robin");
   }
 }

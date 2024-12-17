@@ -78,19 +78,6 @@ public abstract class AbstractStream implements Stream {
   }
 
   /**
-   * A hint to the stream that specifies how many bytes must be queued before
-   * {@link #isReady()} will return false. A stream may ignore this property if
-   * unsupported. This may only be set during stream initialization before
-   * any messages are set.
-   *
-   * @param numBytes The number of bytes that must be queued. Must be a
-   *                 positive integer.
-   */
-  protected void setOnReadyThreshold(int numBytes) {
-    transportState().setOnReadyThreshold(numBytes);
-  }
-
-  /**
    * Closes the underlying framer. Should be called when the outgoing stream is gracefully closed
    * (half closure on client; closure on server).
    */
@@ -156,9 +143,6 @@ public abstract class AbstractStream implements Stream {
     @GuardedBy("onReadyLock")
     private boolean deallocated;
 
-    @GuardedBy("onReadyLock")
-    private int onReadyThreshold;
-
     protected TransportState(
         int maxMessageSize,
         StatsTraceContext statsTraceCtx,
@@ -173,7 +157,6 @@ public abstract class AbstractStream implements Stream {
           transportTracer);
       // TODO(#7168): use MigratingThreadDeframer when enabling retry doesn't break.
       deframer = rawDeframer;
-      onReadyThreshold = DEFAULT_ONREADY_THRESHOLD;
     }
 
     final void optimizeForDirectExecutor() {
@@ -194,20 +177,6 @@ public abstract class AbstractStream implements Stream {
      * Override this method to provide a stream listener.
      */
     protected abstract StreamListener listener();
-
-    /**
-     * A hint to the stream that specifies how many bytes must be queued before
-     * {@link #isReady()} will return false. A stream may ignore this property if
-     * unsupported. This may only be set before any messages are sent.
-     *
-     * @param numBytes The number of bytes that must be queued. Must be a
-     *                 positive integer.
-     */
-    void setOnReadyThreshold(int numBytes) {
-      synchronized (onReadyLock) {
-        this.onReadyThreshold = numBytes;
-      }
-    }
 
     @Override
     public void messagesAvailable(StreamListener.MessageProducer producer) {
@@ -290,7 +259,7 @@ public abstract class AbstractStream implements Stream {
 
     private boolean isReady() {
       synchronized (onReadyLock) {
-        return allocated && numSentBytesQueued < onReadyThreshold && !deallocated;
+        return allocated && numSentBytesQueued < DEFAULT_ONREADY_THRESHOLD && !deallocated;
       }
     }
 
@@ -322,12 +291,6 @@ public abstract class AbstractStream implements Stream {
       }
     }
 
-    protected boolean isStreamDeallocated() {
-      synchronized (onReadyLock) {
-        return deallocated;
-      }
-    }
-
     /**
      * Event handler to be called by the subclass when a number of bytes are being queued for
      * sending to the remote endpoint.
@@ -353,9 +316,9 @@ public abstract class AbstractStream implements Stream {
       synchronized (onReadyLock) {
         checkState(allocated,
             "onStreamAllocated was not called, but it seems the stream is active");
-        boolean belowThresholdBefore = numSentBytesQueued < onReadyThreshold;
+        boolean belowThresholdBefore = numSentBytesQueued < DEFAULT_ONREADY_THRESHOLD;
         numSentBytesQueued -= numBytes;
-        boolean belowThresholdAfter = numSentBytesQueued < onReadyThreshold;
+        boolean belowThresholdAfter = numSentBytesQueued < DEFAULT_ONREADY_THRESHOLD;
         doNotify = !belowThresholdBefore && belowThresholdAfter;
       }
       if (doNotify) {

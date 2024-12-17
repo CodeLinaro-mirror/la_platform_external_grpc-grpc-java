@@ -19,9 +19,6 @@ package io.grpc.xds;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.base.MoreObjects;
-import com.google.common.collect.ImmutableMap;
-import com.google.protobuf.Struct;
-import io.grpc.CallOptions;
 import io.grpc.Internal;
 import io.grpc.LoadBalancer;
 import io.grpc.LoadBalancer.Helper;
@@ -29,14 +26,14 @@ import io.grpc.LoadBalancerProvider;
 import io.grpc.LoadBalancerRegistry;
 import io.grpc.NameResolver.ConfigOrError;
 import io.grpc.Status;
+import io.grpc.internal.ServiceConfigUtil.PolicySelection;
+import io.grpc.xds.Bootstrapper.ServerInfo;
 import io.grpc.xds.Endpoints.DropOverload;
 import io.grpc.xds.EnvoyServerProtoData.UpstreamTlsContext;
-import io.grpc.xds.client.Bootstrapper.ServerInfo;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
 /**
@@ -46,11 +43,6 @@ import javax.annotation.Nullable;
  */
 @Internal
 public final class ClusterImplLoadBalancerProvider extends LoadBalancerProvider {
-  /**
-   * Consumer of filter metadata from the cluster used by the call. Consumer may not modify map.
-   */
-  public static final CallOptions.Key<Consumer<Map<String, Struct>>> FILTER_METADATA_CONSUMER =
-      CallOptions.Key.createWithDefault("io.grpc.xds.internalFilterMetadataConsumer", (m) -> { });
 
   @Override
   public boolean isAvailable() {
@@ -96,22 +88,20 @@ public final class ClusterImplLoadBalancerProvider extends LoadBalancerProvider 
     // Drop configurations.
     final List<DropOverload> dropCategories;
     // Provides the direct child policy and its config.
-    final Object childConfig;
-    final Map<String, Struct> filterMetadata;
+    final PolicySelection childPolicy;
 
     ClusterImplConfig(String cluster, @Nullable String edsServiceName,
         @Nullable ServerInfo lrsServerInfo, @Nullable Long maxConcurrentRequests,
-        List<DropOverload> dropCategories, Object childConfig,
-        @Nullable UpstreamTlsContext tlsContext, Map<String, Struct> filterMetadata) {
+        List<DropOverload> dropCategories, PolicySelection childPolicy,
+        @Nullable UpstreamTlsContext tlsContext) {
       this.cluster = checkNotNull(cluster, "cluster");
       this.edsServiceName = edsServiceName;
       this.lrsServerInfo = lrsServerInfo;
       this.maxConcurrentRequests = maxConcurrentRequests;
       this.tlsContext = tlsContext;
-      this.filterMetadata = ImmutableMap.copyOf(filterMetadata);
       this.dropCategories = Collections.unmodifiableList(
           new ArrayList<>(checkNotNull(dropCategories, "dropCategories")));
-      this.childConfig = checkNotNull(childConfig, "childConfig");
+      this.childPolicy = checkNotNull(childPolicy, "childPolicy");
     }
 
     @Override
@@ -123,7 +113,7 @@ public final class ClusterImplLoadBalancerProvider extends LoadBalancerProvider 
           .add("maxConcurrentRequests", maxConcurrentRequests)
           // Exclude tlsContext as its string representation is cumbersome.
           .add("dropCategories", dropCategories)
-          .add("childConfig", childConfig)
+          .add("childPolicy", childPolicy)
           .toString();
     }
   }

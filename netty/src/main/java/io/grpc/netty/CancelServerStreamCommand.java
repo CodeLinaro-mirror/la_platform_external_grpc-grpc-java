@@ -27,23 +27,10 @@ import io.grpc.Status;
 final class CancelServerStreamCommand extends WriteQueue.AbstractQueuedCommand {
   private final NettyServerStream.TransportState stream;
   private final Status reason;
-  private final PeerNotify peerNotify;
 
-  private CancelServerStreamCommand(
-          NettyServerStream.TransportState stream, Status reason, PeerNotify peerNotify) {
+  CancelServerStreamCommand(NettyServerStream.TransportState stream, Status reason) {
     this.stream = Preconditions.checkNotNull(stream, "stream");
     this.reason = Preconditions.checkNotNull(reason, "reason");
-    this.peerNotify = Preconditions.checkNotNull(peerNotify, "peerNotify");
-  }
-
-  static CancelServerStreamCommand withReset(
-          NettyServerStream.TransportState stream, Status reason) {
-    return new CancelServerStreamCommand(stream, reason, PeerNotify.RESET);
-  }
-
-  static CancelServerStreamCommand withReason(
-          NettyServerStream.TransportState stream, Status reason) {
-    return new CancelServerStreamCommand(stream, reason, PeerNotify.BEST_EFFORT_STATUS);
   }
 
   NettyServerStream.TransportState stream() {
@@ -52,10 +39,6 @@ final class CancelServerStreamCommand extends WriteQueue.AbstractQueuedCommand {
 
   Status reason() {
     return reason;
-  }
-
-  boolean wantsHeaders() {
-    return peerNotify == PeerNotify.BEST_EFFORT_STATUS;
   }
 
   @Override
@@ -84,12 +67,5 @@ final class CancelServerStreamCommand extends WriteQueue.AbstractQueuedCommand {
         .add("stream", stream)
         .add("reason", reason)
         .toString();
-  }
-
-  private enum PeerNotify {
-    /** Notify the peer by sending a RST_STREAM with no other information. */
-    RESET,
-    /** Notify the peer about the {@link #reason} by sending structured headers, if possible. */
-    BEST_EFFORT_STATUS,
   }
 }

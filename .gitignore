@@ -15,7 +15,6 @@ bazel-genfiles
 bazel-grpc-java
 bazel-out
 bazel-testlogs
-MODULE.bazel.lock
 
 # IntelliJ IDEA
 .idea

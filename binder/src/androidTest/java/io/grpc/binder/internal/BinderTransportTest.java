@@ -17,20 +17,24 @@
 package io.grpc.binder.internal;
 
 import android.content.Context;
+import androidx.core.content.ContextCompat;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import com.google.common.util.concurrent.MoreExecutors;
 import io.grpc.ServerStreamTracer;
 import io.grpc.binder.AndroidComponentAddress;
+import io.grpc.binder.BindServiceFlags;
 import io.grpc.binder.HostServices;
+import io.grpc.binder.InboundParcelablePolicy;
+import io.grpc.binder.SecurityPolicies;
 import io.grpc.internal.AbstractTransportTest;
-import io.grpc.internal.ClientTransportFactory.ClientTransportOptions;
+import io.grpc.internal.FixedObjectPool;
 import io.grpc.internal.GrpcUtil;
 import io.grpc.internal.InternalServer;
 import io.grpc.internal.ManagedClientTransport;
 import io.grpc.internal.ObjectPool;
 import io.grpc.internal.SharedResourcePool;
 import java.util.List;
-import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import org.junit.After;
 import org.junit.Ignore;
@@ -49,10 +53,6 @@ public final class BinderTransportTest extends AbstractTransportTest {
   private final Context appContext = ApplicationProvider.getApplicationContext();
   private final ObjectPool<ScheduledExecutorService> executorServicePool =
       SharedResourcePool.forResource(GrpcUtil.TIMER_SERVICE);
-  private final ObjectPool<Executor> offloadExecutorPool =
-      SharedResourcePool.forResource(GrpcUtil.SHARED_CHANNEL_EXECUTOR);
-  private final ObjectPool<Executor> serverExecutorPool =
-      SharedResourcePool.forResource(GrpcUtil.SHARED_CHANNEL_EXECUTOR);
 
   @Override
   @After
@@ -65,16 +65,13 @@ public final class BinderTransportTest extends AbstractTransportTest {
   protected InternalServer newServer(List<ServerStreamTracer.Factory> streamTracerFactories) {
     AndroidComponentAddress addr = HostServices.allocateService(appContext);
 
-    BinderServer binderServer =
-        new BinderServer.Builder()
-            .setListenAddress(addr)
-            .setExecutorPool(serverExecutorPool)
-            .setExecutorServicePool(executorServicePool)
-            .setStreamTracerFactories(streamTracerFactories)
-            .build();
+    BinderServer binderServer = new BinderServer(addr,
+        executorServicePool,
+        streamTracerFactories,
+        SecurityPolicies.serverInternalOnly(),
+        InboundParcelablePolicy.DEFAULT);
 
-    HostServices.configureService(
-        addr,
+    HostServices.configureService(addr,
         HostServices.serviceParamsBuilder()
             .setRawBinderSupplier(() -> binderServer.getHostBinder())
             .build());
@@ -96,18 +93,16 @@ public final class BinderTransportTest extends AbstractTransportTest {
   @Override
   protected ManagedClientTransport newClientTransport(InternalServer server) {
     AndroidComponentAddress addr = (AndroidComponentAddress) server.getListenSocketAddress();
-    BinderClientTransportFactory.Builder builder =
-        new BinderClientTransportFactory.Builder()
-            .setSourceContext(appContext)
-            .setScheduledExecutorPool(executorServicePool)
-            .setOffloadExecutorPool(offloadExecutorPool);
-
-    ClientTransportOptions options = new ClientTransportOptions();
-    options.setEagAttributes(eagAttrs());
-    options.setChannelLogger(transportLogger());
-
     return new BinderTransport.BinderClientTransport(
-        builder.buildClientTransportFactory(), addr, options);
+        appContext,
+        addr,
+        BindServiceFlags.DEFAULTS,
+        ContextCompat.getMainExecutor(appContext),
+        executorServicePool,
+        new FixedObjectPool<>(MoreExecutors.directExecutor()),
+        SecurityPolicies.internalOnly(),
+        InboundParcelablePolicy.DEFAULT,
+        eagAttrs());
   }
 
   @Test
@@ -121,6 +116,11 @@ public final class BinderTransportTest extends AbstractTransportTest {
   public void flowControlPushBack() throws Exception {}
 
   @Test
+  @Ignore("Not yet implemented. See https://github.com/grpc/grpc-java/issues/8931")
+  @Override
+  public void serverNotListening() throws Exception {}
+
+  @Test
   @Ignore("This test isn't appropriate for BinderTransport.")
   @Override
   public void serverAlreadyListening() throws Exception {
@@ -129,7 +129,7 @@ public final class BinderTransportTest extends AbstractTransportTest {
     // refers to an Android Service class declared in an applications manifest.
     //
     // However, unlike a regular network server, which is responsible for listening on its port, a
-    // BinderServer is not responsible for the creation of its host Service. The opposite is
+    // BinderServier is not responsible for the creation of its host Service. The opposite is
     // the case, with the host Android Service (itself created by the Android platform in
     // response to a connection) building the gRPC server.
     //

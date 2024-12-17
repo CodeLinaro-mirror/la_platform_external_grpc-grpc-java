@@ -36,6 +36,7 @@ import io.grpc.netty.InternalNettyServerCredentials;
 import io.grpc.netty.InternalProtocolNegotiator;
 import io.grpc.netty.NettyServerBuilder;
 import io.grpc.xds.FilterChainMatchingProtocolNegotiators.FilterChainMatchingNegotiatorServerFactory;
+import io.grpc.xds.XdsNameResolverProvider.XdsClientPoolFactory;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;

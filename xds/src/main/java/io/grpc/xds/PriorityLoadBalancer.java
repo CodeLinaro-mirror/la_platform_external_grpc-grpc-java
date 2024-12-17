@@ -21,19 +21,22 @@ import static io.grpc.ConnectivityState.CONNECTING;
 import static io.grpc.ConnectivityState.IDLE;
 import static io.grpc.ConnectivityState.READY;
 import static io.grpc.ConnectivityState.TRANSIENT_FAILURE;
+import static io.grpc.xds.XdsSubchannelPickers.BUFFER_PICKER;
 
 import io.grpc.ConnectivityState;
 import io.grpc.InternalLogId;
 import io.grpc.LoadBalancer;
+import io.grpc.LoadBalancerProvider;
 import io.grpc.Status;
 import io.grpc.SynchronizationContext;
 import io.grpc.SynchronizationContext.ScheduledHandle;
+import io.grpc.internal.ServiceConfigUtil.PolicySelection;
 import io.grpc.util.ForwardingLoadBalancerHelper;
 import io.grpc.util.GracefulSwitchLoadBalancer;
 import io.grpc.xds.PriorityLoadBalancerProvider.PriorityLbConfig;
 import io.grpc.xds.PriorityLoadBalancerProvider.PriorityLbConfig.PriorityChildConfig;
-import io.grpc.xds.client.XdsLogger;
-import io.grpc.xds.client.XdsLogger.XdsLogLevel;
+import io.grpc.xds.XdsLogger.XdsLogLevel;
+import io.grpc.xds.XdsSubchannelPickers.ErrorPicker;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -84,7 +87,7 @@ final class PriorityLoadBalancer extends LoadBalancer {
   }
 
   @Override
-  public Status acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
+  public boolean acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
     logger.log(XdsLogLevel.DEBUG, "Received resolution result: {0}", resolvedAddresses);
     this.resolvedAddresses = resolvedAddresses;
     PriorityLbConfig config = (PriorityLbConfig) resolvedAddresses.getLoadBalancingPolicyConfig();
@@ -110,7 +113,7 @@ final class PriorityLoadBalancer extends LoadBalancer {
     }
     handlingResolvedAddresses = false;
     tryNextPriority();
-    return Status.OK;
+    return true;
   }
 
   @Override
@@ -125,8 +128,7 @@ final class PriorityLoadBalancer extends LoadBalancer {
       }
     }
     if (gotoTransientFailure) {
-      updateOverallState(
-          null, TRANSIENT_FAILURE, new FixedResultPicker(PickResult.withError(error)));
+      updateOverallState(null, TRANSIENT_FAILURE, new ErrorPicker(error));
     }
   }
 
@@ -147,7 +149,7 @@ final class PriorityLoadBalancer extends LoadBalancer {
         ChildLbState child =
             new ChildLbState(priority, priorityConfigs.get(priority).ignoreReresolution);
         children.put(priority, child);
-        updateOverallState(priority, CONNECTING, new FixedResultPicker(PickResult.withNoResult()));
+        updateOverallState(priority, CONNECTING, BUFFER_PICKER);
         // Calling the child's updateResolvedAddresses() can result in tryNextPriority() being
         // called recursively. We need to be sure to be done with processing here before it is
         // called.
@@ -206,8 +208,9 @@ final class PriorityLoadBalancer extends LoadBalancer {
     // Timer to delay shutdown and deletion of the priority. Scheduled whenever the child is
     // deactivated.
     @Nullable ScheduledHandle deletionTimer;
+    @Nullable String policy;
     ConnectivityState connectivityState = CONNECTING;
-    SubchannelPicker picker = new FixedResultPicker(PickResult.withNoResult());
+    SubchannelPicker picker = BUFFER_PICKER;
 
     ChildLbState(final String priority, boolean ignoreReresolution) {
       this.priority = priority;
@@ -224,8 +227,8 @@ final class PriorityLoadBalancer extends LoadBalancer {
           // The child is deactivated.
           return;
         }
-        picker = new FixedResultPicker(PickResult.withError(
-            Status.UNAVAILABLE.withDescription("Connection timeout for priority " + priority)));
+        picker = new ErrorPicker(
+            Status.UNAVAILABLE.withDescription("Connection timeout for priority " + priority));
         logger.log(XdsLogLevel.DEBUG, "Priority {0} failed over to next", priority);
         currentPriority = null; // reset currentPriority to guarantee failover happen
         tryNextPriority();
@@ -282,10 +285,17 @@ final class PriorityLoadBalancer extends LoadBalancer {
     void updateResolvedAddresses() {
       PriorityLbConfig config =
           (PriorityLbConfig) resolvedAddresses.getLoadBalancingPolicyConfig();
+      PolicySelection childPolicySelection = config.childConfigs.get(priority).policySelection;
+      LoadBalancerProvider lbProvider = childPolicySelection.getProvider();
+      String newPolicy = lbProvider.getPolicyName();
+      if (!newPolicy.equals(policy)) {
+        policy = newPolicy;
+        lb.switchTo(lbProvider);
+      }
       lb.handleResolvedAddresses(
           resolvedAddresses.toBuilder()
               .setAddresses(AddressFilter.filter(resolvedAddresses.getAddresses(), priority))
-              .setLoadBalancingPolicyConfig(config.childConfigs.get(priority).childConfig)
+              .setLoadBalancingPolicyConfig(childPolicySelection.getConfig())
               .build());
     }
 

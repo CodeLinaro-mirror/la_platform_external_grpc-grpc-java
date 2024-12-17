@@ -50,14 +50,13 @@ final class PickFirstLoadBalancer extends LoadBalancer {
   }
 
   @Override
-  public Status acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
+  public boolean acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
     List<EquivalentAddressGroup> servers = resolvedAddresses.getAddresses();
     if (servers.isEmpty()) {
-      Status unavailableStatus = Status.UNAVAILABLE.withDescription(
-              "NameResolver returned no usable address. addrs=" + resolvedAddresses.getAddresses()
-                      + ", attrs=" + resolvedAddresses.getAttributes());
-      handleNameResolutionError(unavailableStatus);
-      return unavailableStatus;
+      handleNameResolutionError(Status.UNAVAILABLE.withDescription(
+          "NameResolver returned no usable address. addrs=" + resolvedAddresses.getAddresses()
+              + ", attrs=" + resolvedAddresses.getAttributes()));
+      return false;
     }
 
     // We can optionally be configured to shuffle the address list. This can help better distribute
@@ -93,7 +92,7 @@ final class PickFirstLoadBalancer extends LoadBalancer {
       subchannel.updateAddresses(servers);
     }
 
-    return Status.OK;
+    return true;
   }
 
   @Override
@@ -102,7 +101,6 @@ final class PickFirstLoadBalancer extends LoadBalancer {
       subchannel.shutdown();
       subchannel = null;
     }
-
     // NB(lukaszx0) Whether we should propagate the error unconditionally is arguable. It's fine
     // for time being.
     updateBalancingState(TRANSIENT_FAILURE, new Picker(PickResult.withError(error)));

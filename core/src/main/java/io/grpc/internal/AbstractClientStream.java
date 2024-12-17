@@ -92,8 +92,8 @@ public abstract class AbstractClientStream extends AbstractStream
 
   private final TransportTracer transportTracer;
   private final Framer framer;
-  private final boolean shouldBeCountedForInUse;
-  private final boolean useGet;
+  private boolean shouldBeCountedForInUse;
+  private boolean useGet;
   private Metadata headers;
   /**
    * Whether cancel() has been called. This is not strictly necessary, but removes the delay between
@@ -243,13 +243,9 @@ public abstract class AbstractClientStream extends AbstractStream
     protected TransportState(
         int maxMessageSize,
         StatsTraceContext statsTraceCtx,
-        TransportTracer transportTracer,
-        CallOptions options) {
+        TransportTracer transportTracer) {
       super(maxMessageSize, statsTraceCtx, transportTracer);
       this.statsTraceCtx = checkNotNull(statsTraceCtx, "statsTraceCtx");
-      if (options.getOnReadyThreshold() != null) {
-        this.setOnReadyThreshold(options.getOnReadyThreshold());
-      }
     }
 
     private void setFullStreamDecompression(boolean fullStreamDecompression) {
@@ -304,7 +300,7 @@ public abstract class AbstractClientStream extends AbstractStream
      */
     protected void inboundHeadersReceived(Metadata headers) {
       checkState(!statusReported, "Received headers on closed stream");
-      statsTraceCtx.clientInboundHeaders(headers);
+      statsTraceCtx.clientInboundHeaders();
 
       boolean compressedStream = false;
       String streamEncoding = headers.get(CONTENT_ENCODING_KEY);
@@ -459,10 +455,10 @@ public abstract class AbstractClientStream extends AbstractStream
       if (!listenerClosed) {
         listenerClosed = true;
         statsTraceCtx.streamClosed(status);
+        listener().closed(status, rpcProgress, trailers);
         if (getTransportTracer() != null) {
           getTransportTracer().reportStreamClosed(status.isOk());
         }
-        listener().closed(status, rpcProgress, trailers);
       }
     }
   }

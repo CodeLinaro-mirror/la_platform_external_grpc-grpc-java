@@ -54,13 +54,15 @@ public class StatusRuntimeExceptionTest {
   @Test
   public void extendAndOverridePreservesStack() {
     final StackTraceElement element = new StackTraceElement("a", "b", "c", 4);
-    StatusRuntimeException error = new StatusRuntimeException(Status.CANCELLED, new Metadata()) {
+    StatusRuntimeException exception =
+        new StatusRuntimeException(Status.CANCELLED, new Metadata()) {
+
       @Override
       public synchronized Throwable fillInStackTrace() {
         setStackTrace(new StackTraceElement[]{element});
         return this;
       }
     };
-    assertThat(error.getStackTrace()).asList().containsExactly(element);
+    assertThat(exception.getStackTrace()).asList().containsExactly(element);
   }
 }

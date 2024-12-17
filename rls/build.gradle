@@ -1,5 +1,5 @@
 plugins {
-    id "java-library"
+    id "java"
     id "maven-publish"
     id "com.google.protobuf"
     id "jacoco"
@@ -8,15 +8,8 @@ plugins {
 
 description = "gRPC: RouteLookupService Loadbalancing plugin"
 
-tasks.named("jar").configure {
-    manifest {
-        attributes('Automatic-Module-Name': 'io.grpc.rls')
-    }
-}
-
 dependencies {
-    implementation project(':grpc-util'),
-            project(':grpc-core'),
+    implementation project(':grpc-core'),
             project(':grpc-protobuf'),
             project(':grpc-stub'),
             libraries.auto.value.annotations,
@@ -25,10 +18,8 @@ dependencies {
     compileOnly libraries.javax.annotation
     testImplementation libraries.truth,
             project(':grpc-grpclb'),
-            project(':grpc-inprocess'),
             project(':grpc-testing'),
             project(':grpc-testing-proto'),
-            testFixtures(project(':grpc-api')),
             testFixtures(project(':grpc-core'))
     signature libraries.signature.java
 }
@@ -48,7 +39,6 @@ tasks.named("javadoc").configure {
     // Do not publish javadoc since currently there is no public API.
     failOnError false  // no public or protected classes found to document
     exclude 'io/grpc/lookup/v1/**'
-    exclude 'io/grpc/rls/*Provider.java'
     exclude 'io/grpc/rls/internal/**'
     exclude 'io/grpc/rls/Internal*'
 }

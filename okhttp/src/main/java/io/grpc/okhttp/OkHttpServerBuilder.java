@@ -18,6 +18,7 @@ package io.grpc.okhttp;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.errorprone.annotations.DoNotCall;
@@ -74,7 +75,6 @@ public final class OkHttpServerBuilder extends ForwardingServerBuilder<OkHttpSer
   private static final long MIN_MAX_CONNECTION_IDLE_NANO = TimeUnit.SECONDS.toNanos(1L);
   static final long MAX_CONNECTION_AGE_NANOS_DISABLED = Long.MAX_VALUE;
   static final long MAX_CONNECTION_AGE_GRACE_NANOS_INFINITE = Long.MAX_VALUE;
-  static final int MAX_CONCURRENT_STREAMS = Integer.MAX_VALUE;
   private static final long MIN_MAX_CONNECTION_AGE_NANO = TimeUnit.SECONDS.toNanos(1L);
 
   private static final long AS_LARGE_AS_INFINITE = TimeUnit.DAYS.toNanos(1000L);
@@ -89,7 +89,7 @@ public final class OkHttpServerBuilder extends ForwardingServerBuilder<OkHttpSer
   @DoNotCall("Always throws. Use forPort(int, ServerCredentials) instead")
   @Deprecated
   public static OkHttpServerBuilder forPort(int port) {
-    throw new UnsupportedOperationException("Use forPort(int, ServerCredentials) instead");
+    throw new UnsupportedOperationException();
   }
 
   /**
@@ -130,8 +130,8 @@ public final class OkHttpServerBuilder extends ForwardingServerBuilder<OkHttpSer
   long permitKeepAliveTimeInNanos = TimeUnit.MINUTES.toNanos(5);
   long maxConnectionAgeInNanos = MAX_CONNECTION_AGE_NANOS_DISABLED;
   long maxConnectionAgeGraceInNanos = MAX_CONNECTION_AGE_GRACE_NANOS_INFINITE;
-  int maxConcurrentCallsPerConnection = MAX_CONCURRENT_STREAMS;
 
+  @VisibleForTesting
   OkHttpServerBuilder(
       SocketAddress address, HandshakerSocketFactory handshakerSocketFactory) {
     this.listenAddress = Preconditions.checkNotNull(address, "address");
@@ -349,18 +349,6 @@ public final class OkHttpServerBuilder extends ForwardingServerBuilder<OkHttpSer
   public OkHttpServerBuilder maxInboundMetadataSize(int bytes) {
     Preconditions.checkArgument(bytes > 0, "maxInboundMetadataSize must be > 0");
     this.maxInboundMetadataSize = bytes;
-    return this;
-  }
-
-  /**
-   * The maximum number of concurrent calls permitted for each incoming connection. Defaults to no
-   * limit.
-   */
-  @CanIgnoreReturnValue
-  public OkHttpServerBuilder maxConcurrentCallsPerConnection(int maxConcurrentCallsPerConnection) {
-    checkArgument(maxConcurrentCallsPerConnection > 0,
-        "max must be positive: %s", maxConcurrentCallsPerConnection);
-    this.maxConcurrentCallsPerConnection = maxConcurrentCallsPerConnection;
     return this;
   }
 

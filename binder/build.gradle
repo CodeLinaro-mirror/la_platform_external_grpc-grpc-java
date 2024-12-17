@@ -7,13 +7,13 @@ description = 'gRPC BinderChannel'
 
 android {
     namespace 'io.grpc.binder'
-    compileSdkVersion 34
+    compileSdkVersion 33
     compileOptions {
         sourceCompatibility 1.8
         targetCompatibility 1.8
     }
     defaultConfig {
-        minSdkVersion 21
+        minSdkVersion 19
         targetSdkVersion 33
         versionCode 1
         versionName "1.0"
@@ -27,7 +27,6 @@ android {
             withJavadocJar()
         }
     }
-    testFixtures { enable true }
 }
 
 repositories {
@@ -36,9 +35,8 @@ repositories {
 }
 
 dependencies {
-    api project(':grpc-api')
+    api project(':grpc-core')
 
-    implementation project(':grpc-core')
     implementation libraries.androidx.annotation
     implementation libraries.androidx.core
     implementation libraries.androidx.lifecycle.common
@@ -49,12 +47,15 @@ dependencies {
     testImplementation libraries.androidx.lifecycle.service
     testImplementation libraries.junit
     testImplementation libraries.mockito.core
-    testImplementation libraries.robolectric
-    testImplementation libraries.guava.testlib
+    testImplementation (libraries.robolectric) {
+        // Unreleased change: https://github.com/robolectric/robolectric/pull/5432
+        exclude group: 'com.google.auto.service', module: 'auto-service'
+    }
+    testImplementation (libraries.guava.testlib) {
+        exclude group: 'junit', module: 'junit'
+    }
     testImplementation libraries.truth
-    testImplementation project(':grpc-protobuf-lite')
     testImplementation project(':grpc-testing')
-    testImplementation project(':grpc-inprocess')
     testImplementation testFixtures(project(':grpc-core'))
 
     androidTestAnnotationProcessor libraries.auto.value
@@ -69,21 +70,17 @@ dependencies {
     androidTestImplementation libraries.truth
     androidTestImplementation libraries.mockito.android
     androidTestImplementation libraries.androidx.lifecycle.service
-    androidTestImplementation libraries.guava.testlib
+    androidTestImplementation (libraries.guava.testlib) {
+        exclude group: 'junit', module: 'junit'
+    }
     androidTestImplementation testFixtures(project(':grpc-core'))
-
-    testFixturesImplementation libraries.guava.testlib
 }
 
 import net.ltgt.gradle.errorprone.CheckSeverity
 
 tasks.withType(JavaCompile).configureEach {
     options.compilerArgs += [
-            "-Xlint:-cast",
-            // For junit-1.15-api & org.robolectric/shadows-framework/4.11.1
-            "-Xlint:-classfile",
-            // Unclaimed annotations. TODO(jdcormie): Fix?
-            "-Xlint:-processing",
+            "-Xlint:-cast"
     ]
     appendToProperty(it.options.errorprone.excludedPaths, ".*/R.java", "|")
 }
@@ -128,9 +125,4 @@ publishing {
             }
         }
     }
-}
-
-afterEvaluate {
-    components.release.withVariantsFromConfiguration(configurations.releaseTestFixturesVariantReleaseApiPublication) { skip() }
-    components.release.withVariantsFromConfiguration(configurations.releaseTestFixturesVariantReleaseRuntimePublication) { skip() }
 }

@@ -16,15 +16,12 @@
 
 package io.grpc.xds;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
 import com.google.auto.value.AutoValue;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.protobuf.util.Durations;
 import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.CommonTlsContext;
 import io.grpc.Internal;
-import io.grpc.xds.client.EnvoyProtoData;
 import io.grpc.xds.internal.security.SslContextProviderSupplier;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -43,13 +40,13 @@ public final class EnvoyServerProtoData {
   }
 
   public abstract static class BaseTlsContext {
-    protected final CommonTlsContext commonTlsContext;
+    @Nullable protected final CommonTlsContext commonTlsContext;
 
-    protected BaseTlsContext(CommonTlsContext commonTlsContext) {
-      this.commonTlsContext = checkNotNull(commonTlsContext, "commonTlsContext cannot be null.");
+    protected BaseTlsContext(@Nullable CommonTlsContext commonTlsContext) {
+      this.commonTlsContext = commonTlsContext;
     }
 
-    public CommonTlsContext getCommonTlsContext() {
+    @Nullable public CommonTlsContext getCommonTlsContext() {
       return commonTlsContext;
     }
 

@@ -16,6 +16,7 @@
 
 package io.grpc.netty;
 
+import static com.google.common.base.Charsets.UTF_8;
 import static com.google.common.truth.Truth.assertThat;
 import static io.grpc.internal.ClientStreamListener.RpcProgress.MISCARRIED;
 import static io.grpc.internal.ClientStreamListener.RpcProgress.PROCESSED;
@@ -29,7 +30,6 @@ import static io.grpc.netty.Utils.STATUS_OK;
 import static io.grpc.netty.Utils.TE_HEADER;
 import static io.grpc.netty.Utils.TE_TRAILERS;
 import static io.netty.handler.codec.http2.Http2CodecUtil.DEFAULT_PRIORITY_WEIGHT;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -47,7 +47,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 import com.google.common.base.Stopwatch;
-import com.google.common.base.Strings;
 import com.google.common.base.Supplier;
 import com.google.common.base.Ticker;
 import com.google.common.collect.ImmutableList;
@@ -123,7 +122,6 @@ public class NettyClientHandlerTest extends NettyHandlerTestBase<NettyClientHand
   private Http2Headers grpcHeaders;
   private long nanoTime; // backs a ticker, for testing ping round-trip time measurement
   private int maxHeaderListSize = Integer.MAX_VALUE;
-  private int softLimitHeaderListSize = Integer.MAX_VALUE;
   private int streamId = STREAM_ID;
   private ClientTransportLifecycleManager lifecycleManager;
   private KeepAliveManager mockKeepAliveManager = null;
@@ -187,8 +185,8 @@ public class NettyClientHandlerTest extends NettyHandlerTestBase<NettyClientHand
               return null;
             }
           })
-        .when(streamListener)
-        .messagesAvailable(ArgumentMatchers.<StreamListener.MessageProducer>any());
+      .when(streamListener)
+      .messagesAvailable(ArgumentMatchers.<StreamListener.MessageProducer>any());
 
     lifecycleManager = new ClientTransportLifecycleManager(listener);
     // This mocks the keepalive manager only for there's in which we verify it. For other tests
@@ -217,36 +215,6 @@ public class NettyClientHandlerTest extends NettyHandlerTestBase<NettyClientHand
     // Simulate receipt of initial remote settings.
     ByteBuf serializedSettings = serializeSettings(new Http2Settings());
     channelRead(serializedSettings);
-  }
-
-  @Test
-  @SuppressWarnings("InlineMeInliner")
-  public void sendLargerThanSoftLimitHeaderMayFail() throws Exception {
-    maxHeaderListSize = 8000;
-    softLimitHeaderListSize = 2000;
-    manualSetUp();
-
-    createStream();
-    // total head size of 7999, soft limit = 2000 and max = 8000.
-    // This header has 5999/6000 chance to be rejected.
-    Http2Headers headers = new DefaultHttp2Headers()
-        .scheme(HTTPS)
-        .authority(as("www.fake.com"))
-        .path(as("/fakemethod"))
-        .method(HTTP_METHOD)
-        .add(as("auth"), as("sometoken"))
-        .add(CONTENT_TYPE_HEADER, CONTENT_TYPE_GRPC)
-        .add(TE_HEADER, TE_TRAILERS)
-        .add("large-field", Strings.repeat("a", 7620)); // String.repeat() requires Java 11
-
-    ByteBuf headersFrame = headersFrame(STREAM_ID, headers);
-    channelRead(headersFrame);
-    ArgumentCaptor<Status> statusArgumentCaptor = ArgumentCaptor.forClass(Status.class);
-    verify(streamListener).closed(statusArgumentCaptor.capture(), eq(PROCESSED),
-        any(Metadata.class));
-    assertThat(statusArgumentCaptor.getValue().getCode()).isEqualTo(Status.Code.RESOURCE_EXHAUSTED);
-    assertThat(statusArgumentCaptor.getValue().getDescription()).contains(
-        "exceeded Metadata size soft limit");
   }
 
   @Test
@@ -978,7 +946,6 @@ public class NettyClientHandlerTest extends NettyHandlerTestBase<NettyClientHand
         false,
         flowControlWindow,
         maxHeaderListSize,
-        softLimitHeaderListSize,
         stopwatchSupplier,
         tooManyPingsRunnable,
         transportTracer,
@@ -1033,8 +1000,7 @@ public class NettyClientHandlerTest extends NettyHandlerTestBase<NettyClientHand
           maxMessageSize,
           StatsTraceContext.NOOP,
           transportTracer,
-          "methodName",
-          CallOptions.DEFAULT);
+          "methodName");
     }
 
     @Override

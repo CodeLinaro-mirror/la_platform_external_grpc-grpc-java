@@ -23,7 +23,6 @@ import static io.grpc.internal.TransportFrameUtil.toRawSerializedHeaders;
 import static io.netty.channel.ChannelOption.SO_LINGER;
 import static io.netty.channel.ChannelOption.SO_TIMEOUT;
 import static io.netty.util.CharsetUtil.UTF_8;
-import static java.nio.charset.StandardCharsets.US_ASCII;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
@@ -38,7 +37,6 @@ import io.grpc.netty.GrpcHttp2HeadersUtils.GrpcHttp2InboundHeaders;
 import io.grpc.netty.NettySocketSupport.NativeSocketOptions;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.PooledByteBufAllocator;
-import io.netty.buffer.UnpooledByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelFactory;
@@ -62,7 +60,6 @@ import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.UnresolvedAddressException;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -92,9 +89,7 @@ class Utils {
       = new DefaultEventLoopGroupResource(1, "grpc-nio-boss-ELG", EventLoopGroupType.NIO);
   public static final Resource<EventLoopGroup> NIO_WORKER_EVENT_LOOP_GROUP
       = new DefaultEventLoopGroupResource(0, "grpc-nio-worker-ELG", EventLoopGroupType.NIO);
-  private static final int HEADER_ENTRY_OVERHEAD = 32;
-  private static final byte[] binaryHeaderSuffixBytes =
-      Metadata.BINARY_HEADER_SUFFIX.getBytes(US_ASCII);
+
   public static final Resource<EventLoopGroup> DEFAULT_BOSS_EVENT_LOOP_GROUP;
   public static final Resource<EventLoopGroup> DEFAULT_WORKER_EVENT_LOOP_GROUP;
 
@@ -140,18 +135,13 @@ class Utils {
   public static ByteBufAllocator getByteBufAllocator(boolean forceHeapBuffer) {
     if (Boolean.parseBoolean(
             System.getProperty("io.grpc.netty.useCustomAllocator", "true"))) {
-
-      String allocType = System.getProperty("io.netty.allocator.type", "pooled");
-      if (allocType.toLowerCase(Locale.ROOT).equals("unpooled")) {
-        logger.log(Level.FINE, "Using unpooled allocator");
-        return UnpooledByteBufAllocator.DEFAULT;
-      }
-
       boolean defaultPreferDirect = PooledByteBufAllocator.defaultPreferDirect();
       logger.log(
           Level.FINE,
-          "Using custom allocator: forceHeapBuffer={0}, defaultPreferDirect={1}",
-          new Object[] { forceHeapBuffer, defaultPreferDirect });
+          String.format(
+              "Using custom allocator: forceHeapBuffer=%s, defaultPreferDirect=%s",
+              forceHeapBuffer,
+              defaultPreferDirect));
       if (forceHeapBuffer || !defaultPreferDirect) {
         return ByteBufAllocatorPreferHeapHolder.allocator;
       } else {
@@ -196,61 +186,6 @@ class Utils {
       return InternalMetadata.newMetadata(h.numHeaders(), h.namesAndValues());
     }
     return InternalMetadata.newMetadata(convertHeadersToArray(http2Headers));
-  }
-
-  public static int getH2HeadersSize(Http2Headers http2Headers) {
-    if (http2Headers instanceof GrpcHttp2InboundHeaders) {
-      GrpcHttp2InboundHeaders h = (GrpcHttp2InboundHeaders) http2Headers;
-      int size = 0;
-      for (int i = 0; i < h.numHeaders(); i++) {
-        size += h.namesAndValues()[2 * i].length;
-        size +=
-            maybeAddBinaryHeaderOverhead(h.namesAndValues()[2 * i], h.namesAndValues()[2 * i + 1]);
-        size += HEADER_ENTRY_OVERHEAD;
-      }
-      return size;
-    }
-
-    // the binary header is not decoded yet, no need to add overhead.
-    int size = 0;
-    for (Map.Entry<CharSequence, CharSequence> entry : http2Headers) {
-      size += entry.getKey().length();
-      size += entry.getValue().length();
-      size += HEADER_ENTRY_OVERHEAD;
-    }
-    return size;
-  }
-
-  private static int maybeAddBinaryHeaderOverhead(byte[] name, byte[] value) {
-    if (endsWith(name, binaryHeaderSuffixBytes)) {
-      return value.length * 4 / 3;
-    }
-    return value.length;
-  }
-
-  private static boolean endsWith(byte[] bytes, byte[] suffix) {
-    if (bytes == null || suffix == null || bytes.length < suffix.length) {
-      return false;
-    }
-
-    for (int i = 0; i < suffix.length; i++) {
-      if (bytes[bytes.length - suffix.length + i] != suffix[i]) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  public static boolean shouldRejectOnMetadataSizeSoftLimitExceeded(
-      int h2HeadersSize, int softLimitHeaderListSize, int maxHeaderListSize) {
-    if (h2HeadersSize < softLimitHeaderListSize) {
-      return false;
-    }
-    double failProbability =
-        (double) (h2HeadersSize - softLimitHeaderListSize) / (double) (maxHeaderListSize
-            - softLimitHeaderListSize);
-    return Math.random() < failProbability;
   }
 
   @CheckReturnValue
@@ -330,16 +265,9 @@ class Utils {
       return s;
     }
     if (t instanceof ClosedChannelException) {
-      if (t.getCause() != null) {
-        // If the remote closes the connection while the event loop is processing, then a write or
-        // flush can be the first operation to notice the closure. Those exceptions are a
-        // ClosedChannelException, with a cause that provides more information, which is exactly
-        // what we'd hope for.
-        return Status.UNAVAILABLE.withDescription("channel closed").withCause(t);
-      }
-      // ClosedChannelException is used for all operations after the Netty channel is closed. But it
-      // doesn't have the original closure information. Proper error processing requires remembering
-      // the error that occurred before this one and using it instead.
+      // ClosedChannelException is used any time the Netty channel is closed. Proper error
+      // processing requires remembering the error that occurred before this one and using it
+      // instead.
       //
       // Netty uses an exception that has no stack trace, while we would never hope to show this to
       // users, if it happens having the extra information may provide a small hint of where to

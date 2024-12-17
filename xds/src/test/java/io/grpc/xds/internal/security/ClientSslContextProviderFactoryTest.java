@@ -28,16 +28,18 @@ import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.CertificateValida
 import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.CommonTlsContext;
 import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.TlsCertificate;
 import io.envoyproxy.envoy.type.matcher.v3.StringMatcher;
+import io.grpc.xds.Bootstrapper;
 import io.grpc.xds.CommonBootstrapperTestUtils;
 import io.grpc.xds.EnvoyServerProtoData.UpstreamTlsContext;
-import io.grpc.xds.client.Bootstrapper;
-import io.grpc.xds.client.XdsInitializationException;
+import io.grpc.xds.XdsInitializationException;
 import io.grpc.xds.internal.security.certprovider.CertProviderClientSslContextProviderFactory;
 import io.grpc.xds.internal.security.certprovider.CertificateProvider;
 import io.grpc.xds.internal.security.certprovider.CertificateProviderProvider;
 import io.grpc.xds.internal.security.certprovider.CertificateProviderRegistry;
 import io.grpc.xds.internal.security.certprovider.CertificateProviderStore;
 import io.grpc.xds.internal.security.certprovider.TestCertificateProvider;
+import java.io.IOException;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -281,6 +283,22 @@ public class ClientSslContextProviderFactoryTest {
     assertThat(sslContextProvider.getClass().getSimpleName()).isEqualTo(
         "CertProviderClientSslContextProvider");
     verifyWatcher(sslContextProvider, watcherCaptor[0]);
+  }
+
+  @Test
+  public void createNullCommonTlsContext_exception() throws IOException {
+    clientSslContextProviderFactory =
+            new ClientSslContextProviderFactory(
+                    null, certProviderClientSslContextProviderFactory);
+    UpstreamTlsContext upstreamTlsContext = new UpstreamTlsContext(null);
+    try {
+      clientSslContextProviderFactory.create(upstreamTlsContext);
+      Assert.fail("no exception thrown");
+    } catch (NullPointerException expected) {
+      assertThat(expected)
+              .hasMessageThat()
+              .isEqualTo("upstreamTlsContext should have CommonTlsContext");
+    }
   }
 
   static void createAndRegisterProviderProvider(

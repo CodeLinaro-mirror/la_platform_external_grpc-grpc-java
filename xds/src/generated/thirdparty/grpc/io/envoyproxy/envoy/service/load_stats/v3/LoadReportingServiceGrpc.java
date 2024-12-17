@@ -12,7 +12,7 @@ public final class LoadReportingServiceGrpc {
 
   private LoadReportingServiceGrpc() {}
 
-  public static final java.lang.String SERVICE_NAME = "envoy.service.load_stats.v3.LoadReportingService";
+  public static final String SERVICE_NAME = "envoy.service.load_stats.v3.LoadReportingService";
 
   // Static method descriptors that strictly reflect the proto.
   private static volatile io.grpc.MethodDescriptor<io.envoyproxy.envoy.service.load_stats.v3.LoadStatsRequest,
@@ -303,9 +303,9 @@ public final class LoadReportingServiceGrpc {
   private static final class LoadReportingServiceMethodDescriptorSupplier
       extends LoadReportingServiceBaseDescriptorSupplier
       implements io.grpc.protobuf.ProtoMethodDescriptorSupplier {
-    private final java.lang.String methodName;
+    private final String methodName;
 
-    LoadReportingServiceMethodDescriptorSupplier(java.lang.String methodName) {
+    LoadReportingServiceMethodDescriptorSupplier(String methodName) {
       this.methodName = methodName;
     }
 

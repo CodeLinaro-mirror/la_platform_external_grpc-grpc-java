@@ -68,15 +68,12 @@ public final class UdsChannelBuilder {
       throw new UnsupportedOperationException("OkHttpChannelBuilder not found on the classpath");
     }
     try {
-      // Target 'dns:///127.0.0.1' is unused, but necessary as an argument for OkHttpChannelBuilder.
-      // An IP address is used instead of localhost to avoid a DNS lookup (see #11442). This should
-      // work even if IPv4 is unavailable, as the DNS resolver doesn't need working IPv4 to parse an
-      // IPv4 address. Unavailable IPv4 fails when we connect(), not at resolution time.
+      // Target 'dns:///localhost' is unused, but necessary as an argument for OkHttpChannelBuilder.
       // TLS is unsupported because Conscrypt assumes the platform Socket implementation to improve
       // performance by using the file descriptor directly.
       Object o = OKHTTP_CHANNEL_BUILDER_CLASS
           .getMethod("forTarget", String.class, ChannelCredentials.class)
-          .invoke(null, "dns:///127.0.0.1", InsecureChannelCredentials.create());
+          .invoke(null, "dns:///localhost", InsecureChannelCredentials.create());
       ManagedChannelBuilder<?> builder = OKHTTP_CHANNEL_BUILDER_CLASS.cast(o);
       OKHTTP_CHANNEL_BUILDER_CLASS
           .getMethod("socketFactory", SocketFactory.class)

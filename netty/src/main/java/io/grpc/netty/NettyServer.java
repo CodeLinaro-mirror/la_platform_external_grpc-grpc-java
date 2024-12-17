@@ -92,7 +92,6 @@ class NettyServer implements InternalServer, InternalWithLogId {
   private final int flowControlWindow;
   private final int maxMessageSize;
   private final int maxHeaderListSize;
-  private final int softLimitHeaderListSize;
   private final long keepAliveTimeInNanos;
   private final long keepAliveTimeoutInNanos;
   private final long maxConnectionIdleInNanos;
@@ -100,8 +99,6 @@ class NettyServer implements InternalServer, InternalWithLogId {
   private final long maxConnectionAgeGraceInNanos;
   private final boolean permitKeepAliveWithoutCalls;
   private final long permitKeepAliveTimeInNanos;
-  private final int maxRstCount;
-  private final long maxRstPeriodNanos;
   private final Attributes eagAttributes;
   private final ReferenceCounted sharedResourceReferenceCounter =
       new SharedResourceReferenceCounter();
@@ -124,18 +121,12 @@ class NettyServer implements InternalServer, InternalWithLogId {
       ProtocolNegotiator protocolNegotiator,
       List<? extends ServerStreamTracer.Factory> streamTracerFactories,
       TransportTracer.Factory transportTracerFactory,
-      int maxStreamsPerConnection,
-      boolean autoFlowControl,
-      int flowControlWindow,
-      int maxMessageSize,
-      int maxHeaderListSize,
-      int softLimitHeaderListSize,
-      long keepAliveTimeInNanos,
-      long keepAliveTimeoutInNanos,
+      int maxStreamsPerConnection, boolean autoFlowControl, int flowControlWindow,
+      int maxMessageSize, int maxHeaderListSize,
+      long keepAliveTimeInNanos, long keepAliveTimeoutInNanos,
       long maxConnectionIdleInNanos,
       long maxConnectionAgeInNanos, long maxConnectionAgeGraceInNanos,
       boolean permitKeepAliveWithoutCalls, long permitKeepAliveTimeInNanos,
-      int maxRstCount, long maxRstPeriodNanos,
       Attributes eagAttributes, InternalChannelz channelz) {
     this.addresses = checkNotNull(addresses, "addresses");
     this.channelFactory = checkNotNull(channelFactory, "channelFactory");
@@ -158,7 +149,6 @@ class NettyServer implements InternalServer, InternalWithLogId {
     this.flowControlWindow = flowControlWindow;
     this.maxMessageSize = maxMessageSize;
     this.maxHeaderListSize = maxHeaderListSize;
-    this.softLimitHeaderListSize = softLimitHeaderListSize;
     this.keepAliveTimeInNanos = keepAliveTimeInNanos;
     this.keepAliveTimeoutInNanos = keepAliveTimeoutInNanos;
     this.maxConnectionIdleInNanos = maxConnectionIdleInNanos;
@@ -166,8 +156,6 @@ class NettyServer implements InternalServer, InternalWithLogId {
     this.maxConnectionAgeGraceInNanos = maxConnectionAgeGraceInNanos;
     this.permitKeepAliveWithoutCalls = permitKeepAliveWithoutCalls;
     this.permitKeepAliveTimeInNanos = permitKeepAliveTimeInNanos;
-    this.maxRstCount = maxRstCount;
-    this.maxRstPeriodNanos = maxRstPeriodNanos;
     this.eagAttributes = checkNotNull(eagAttributes, "eagAttributes");
     this.channelz = Preconditions.checkNotNull(channelz);
     this.logId = InternalLogId.allocate(getClass(), addresses.isEmpty() ? "No address" :
@@ -250,29 +238,26 @@ class NettyServer implements InternalServer, InternalWithLogId {
               (long) ((.9D + Math.random() * .2D) * maxConnectionAgeInNanos);
         }
 
-            NettyServerTransport transport =
-                new NettyServerTransport(
-                    ch,
-                    channelDone,
-                    protocolNegotiator,
-                    streamTracerFactories,
-                    transportTracerFactory.create(),
-                    maxStreamsPerConnection,
-                    autoFlowControl,
-                    flowControlWindow,
-                    maxMessageSize,
-                    maxHeaderListSize,
-                    softLimitHeaderListSize,
-                    keepAliveTimeInNanos,
-                    keepAliveTimeoutInNanos,
-                    maxConnectionIdleInNanos,
-                    maxConnectionAgeInNanos,
-                    maxConnectionAgeGraceInNanos,
-                    permitKeepAliveWithoutCalls,
-                    permitKeepAliveTimeInNanos,
-                    maxRstCount,
-                    maxRstPeriodNanos,
-                    eagAttributes);
+        NettyServerTransport transport =
+            new NettyServerTransport(
+                ch,
+                channelDone,
+                protocolNegotiator,
+                streamTracerFactories,
+                transportTracerFactory.create(),
+                maxStreamsPerConnection,
+                autoFlowControl,
+                flowControlWindow,
+                maxMessageSize,
+                maxHeaderListSize,
+                keepAliveTimeInNanos,
+                keepAliveTimeoutInNanos,
+                maxConnectionIdleInNanos,
+                maxConnectionAgeInNanos,
+                maxConnectionAgeGraceInNanos,
+                permitKeepAliveWithoutCalls,
+                permitKeepAliveTimeInNanos,
+                eagAttributes);
         ServerTransportListener transportListener;
         // This is to order callbacks on the listener, not to guard access to channel.
         synchronized (NettyServer.this) {
@@ -287,7 +272,9 @@ class NettyServer implements InternalServer, InternalWithLogId {
           transportListener = listener.transportCreated(transport);
         }
 
-        /* Releases the event loop if the channel is "done", possibly due to the channel closing. */
+        /**
+         * Releases the event loop if the channel is "done", possibly due to the channel closing.
+         */
         final class LoopReleaser implements ChannelFutureListener {
           private boolean done;
 

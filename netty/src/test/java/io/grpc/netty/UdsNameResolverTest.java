@@ -18,16 +18,10 @@ package io.grpc.netty;
 
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.fail;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
-import io.grpc.ChannelLogger;
 import io.grpc.EquivalentAddressGroup;
 import io.grpc.NameResolver;
-import io.grpc.NameResolver.ServiceConfigParser;
-import io.grpc.SynchronizationContext;
-import io.grpc.internal.FakeClock;
-import io.grpc.internal.GrpcUtil;
 import io.netty.channel.unix.DomainSocketAddress;
 import java.net.SocketAddress;
 import java.util.List;
@@ -47,20 +41,7 @@ public class UdsNameResolverTest {
 
   @Rule
   public final MockitoRule mocks = MockitoJUnit.rule();
-  private static final int DEFAULT_PORT = 887;
-  private final FakeClock fakeExecutor = new FakeClock();
-  private final SynchronizationContext syncContext = new SynchronizationContext(
-      (t, e) -> {
-        throw new AssertionError(e);
-      });
-  private final NameResolver.Args args = NameResolver.Args.newBuilder()
-      .setDefaultPort(DEFAULT_PORT)
-      .setProxyDetector(GrpcUtil.DEFAULT_PROXY_DETECTOR)
-      .setSynchronizationContext(syncContext)
-      .setServiceConfigParser(mock(ServiceConfigParser.class))
-      .setChannelLogger(mock(ChannelLogger.class))
-      .setScheduledExecutorService(fakeExecutor.getScheduledExecutorService())
-      .build();
+
   @Mock
   private NameResolver.Listener2 mockListener;
 
@@ -71,11 +52,11 @@ public class UdsNameResolverTest {
 
   @Test
   public void testValidTargetPath() {
-    udsNameResolver = new UdsNameResolver(null, "sock.sock", args);
+    udsNameResolver = new UdsNameResolver(null, "sock.sock");
     udsNameResolver.start(mockListener);
-    verify(mockListener).onResult2(resultCaptor.capture());
+    verify(mockListener).onResult(resultCaptor.capture());
     NameResolver.ResolutionResult result = resultCaptor.getValue();
-    List<EquivalentAddressGroup> list = result.getAddressesOrError().getValue();
+    List<EquivalentAddressGroup> list = result.getAddresses();
     assertThat(list).isNotNull();
     assertThat(list).hasSize(1);
     EquivalentAddressGroup eag = list.get(0);
@@ -91,7 +72,7 @@ public class UdsNameResolverTest {
   @Test
   public void testNonNullAuthority() {
     try {
-      udsNameResolver = new UdsNameResolver("authority", "sock.sock", args);
+      udsNameResolver = new UdsNameResolver("authority", "sock.sock");
       fail("exception expected");
     } catch (IllegalArgumentException e) {
       assertThat(e).hasMessageThat().isEqualTo("non-null authority not supported");

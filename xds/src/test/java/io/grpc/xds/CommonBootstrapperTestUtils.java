@@ -19,9 +19,7 @@ package io.grpc.xds;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.grpc.internal.JsonParser;
-import io.grpc.xds.client.Bootstrapper;
-import io.grpc.xds.client.Bootstrapper.ServerInfo;
-import io.grpc.xds.client.EnvoyProtoData;
+import io.grpc.xds.Bootstrapper.ServerInfo;
 import io.grpc.xds.internal.security.CommonTlsContextTestsUtil;
 import java.io.IOException;
 import java.util.HashMap;
@@ -88,7 +86,7 @@ public class CommonBootstrapperTestUtils {
       String certInstanceName1, @Nullable String privateKey1,
       @Nullable String cert1,
       @Nullable String trustCa1, String certInstanceName2, String privateKey2, String cert2,
-      String trustCa2, @Nullable String spiffeTrustMap) {
+      String trustCa2) {
     // get temp file for each file
     try {
       if (privateKey1 != null) {
@@ -109,9 +107,6 @@ public class CommonBootstrapperTestUtils {
       if (trustCa2 != null) {
         trustCa2 = CommonTlsContextTestsUtil.getTempFileNameForResourcesFile(trustCa2);
       }
-      if (spiffeTrustMap != null) {
-        spiffeTrustMap = CommonTlsContextTestsUtil.getTempFileNameForResourcesFile(spiffeTrustMap);
-      }
     } catch (IOException ioe) {
       throw new RuntimeException(ioe);
     }
@@ -119,9 +114,6 @@ public class CommonBootstrapperTestUtils {
     config.put("certificate_file", cert1);
     config.put("private_key_file", privateKey1);
     config.put("ca_certificate_file", trustCa1);
-    if (spiffeTrustMap != null) {
-      config.put("spiffe_trust_bundle_map_file", spiffeTrustMap);
-    }
     Bootstrapper.CertificateProviderInfo certificateProviderInfo =
         Bootstrapper.CertificateProviderInfo.create("file_watcher", config);
     HashMap<String, Bootstrapper.CertificateProviderInfo> certProviders =
@@ -132,9 +124,6 @@ public class CommonBootstrapperTestUtils {
       config.put("certificate_file", cert2);
       config.put("private_key_file", privateKey2);
       config.put("ca_certificate_file", trustCa2);
-      if (spiffeTrustMap != null) {
-        config.put("spiffe_trust_bundle_map_file", spiffeTrustMap);
-      }
       certificateProviderInfo =
           Bootstrapper.CertificateProviderInfo.create("file_watcher", config);
       certProviders.put(certInstanceName2, certificateProviderInfo);

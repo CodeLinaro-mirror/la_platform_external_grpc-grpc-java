@@ -131,11 +131,6 @@ final class OobChannel extends ManagedChannel implements InternalInstrumented<Ch
         }
 
         @Override
-        public Attributes filterTransport(Attributes attributes) {
-          return attributes;
-        }
-
-        @Override
         public void transportInUse(boolean inUse) {
           // Don't care
         }

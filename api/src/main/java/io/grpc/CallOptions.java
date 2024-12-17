@@ -17,11 +17,9 @@
 package io.grpc;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.grpc.TimeUtils.convertToNanos;
 
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -81,8 +79,6 @@ public final class CallOptions {
   private final Integer maxInboundMessageSize;
   @Nullable
   private final Integer maxOutboundMessageSize;
-  @Nullable
-  private final Integer onReadyThreshold;
 
   private CallOptions(Builder builder) {
     this.deadline = builder.deadline;
@@ -95,7 +91,6 @@ public final class CallOptions {
     this.waitForReady = builder.waitForReady;
     this.maxInboundMessageSize = builder.maxInboundMessageSize;
     this.maxOutboundMessageSize = builder.maxOutboundMessageSize;
-    this.onReadyThreshold = builder.onReadyThreshold;
   }
 
   static class Builder {
@@ -110,7 +105,6 @@ public final class CallOptions {
     Boolean waitForReady;
     Integer maxInboundMessageSize;
     Integer maxOutboundMessageSize;
-    Integer onReadyThreshold;
 
     private CallOptions build() {
       return new CallOptions(this);
@@ -178,11 +172,6 @@ public final class CallOptions {
     return withDeadline(Deadline.after(duration, unit));
   }
 
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/11657")
-  public CallOptions withDeadlineAfter(Duration duration) {
-    return withDeadlineAfter(convertToNanos(duration), TimeUnit.NANOSECONDS);
-  }
-
   /**
    * Returns the deadline or {@code null} if the deadline is not set.
    */
@@ -212,46 +201,6 @@ public final class CallOptions {
     Builder builder = toBuilder(this);
     builder.waitForReady = Boolean.FALSE;
     return builder.build();
-  }
-
-  /**
-   * Specifies how many bytes must be queued before the call is
-   * considered not ready to send more messages.
-   *
-   * @param numBytes The number of bytes that must be queued. Must be a
-   *                 positive integer.
-   */
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/11021")
-  public CallOptions withOnReadyThreshold(int numBytes) {
-    checkArgument(numBytes > 0, "numBytes must be positive: %s", numBytes);
-    Builder builder = toBuilder(this);
-    builder.onReadyThreshold = numBytes;
-    return builder.build();
-  }
-
-  /**
-   * Resets to the default number of bytes that must be queued before the
-   * call will leave the <a href="https://github.com/grpc/grpc/blob/master/doc/wait-for-ready.md">
-   * 'wait for ready'</a> state.
-   */
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/11021")
-  public CallOptions clearOnReadyThreshold() {
-    Builder builder = toBuilder(this);
-    builder.onReadyThreshold = null;
-    return builder.build();
-  }
-
-  /**
-   * Returns to the default number of bytes that must be queued before the
-   * call will leave the <a href="https://github.com/grpc/grpc/blob/master/doc/wait-for-ready.md">
-   * 'wait for ready'</a> state.
-   *
-   * @return null if the default threshold is used.
-   */
-  @Nullable
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/11021")
-  public Integer getOnReadyThreshold() {
-    return onReadyThreshold;
   }
 
   /**
@@ -519,7 +468,6 @@ public final class CallOptions {
     builder.waitForReady = other.waitForReady;
     builder.maxInboundMessageSize = other.maxInboundMessageSize;
     builder.maxOutboundMessageSize = other.maxOutboundMessageSize;
-    builder.onReadyThreshold = other.onReadyThreshold;
     return builder;
   }
 
@@ -535,7 +483,6 @@ public final class CallOptions {
         .add("waitForReady", isWaitForReady())
         .add("maxInboundMessageSize", maxInboundMessageSize)
         .add("maxOutboundMessageSize", maxOutboundMessageSize)
-        .add("onReadyThreshold", onReadyThreshold)
         .add("streamTracerFactories", streamTracerFactories)
         .toString();
   }

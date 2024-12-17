@@ -32,7 +32,6 @@ import static org.mockito.Mockito.mock;
 import com.google.common.base.Objects;
 import io.grpc.ClientStreamTracer.StreamInfo;
 import io.grpc.internal.SerializingExecutor;
-import java.time.Duration;
 import java.util.concurrent.Executor;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -80,16 +79,6 @@ public class CallOptionsTest {
     assertThat(CallOptions.DEFAULT.withWaitForReady().isWaitForReady()).isTrue();
     assertThat(CallOptions.DEFAULT.withWaitForReady().withoutWaitForReady().isWaitForReady())
         .isFalse();
-  }
-
-  @Test
-  public void withOnReadyThreshold() {
-    int onReadyThreshold = 1024;
-    CallOptions callOptions = CallOptions.DEFAULT.withOnReadyThreshold(onReadyThreshold);
-    callOptions = callOptions.withWaitForReady();
-    assertThat(callOptions.getOnReadyThreshold()).isEqualTo(onReadyThreshold);
-    callOptions = callOptions.clearOnReadyThreshold();
-    assertThat(callOptions.getOnReadyThreshold()).isNull();
   }
 
   @Test
@@ -152,14 +141,6 @@ public class CallOptionsTest {
   }
 
   @Test
-  public void withDeadlineAfterDuration() {
-    Deadline actual = CallOptions.DEFAULT.withDeadlineAfter(Duration.ofMinutes(1L)).getDeadline();
-    Deadline expected = Deadline.after(1, MINUTES);
-
-    assertAbout(deadline()).that(actual).isWithin(10, MILLISECONDS).of(expected);
-  }
-
-  @Test
   public void toStringMatches_noDeadline_default() {
     String actual = allSet
         .withDeadline(null)
@@ -167,7 +148,6 @@ public class CallOptionsTest {
         .withCallCredentials(null)
         .withMaxInboundMessageSize(44)
         .withMaxOutboundMessageSize(55)
-        .withOnReadyThreshold(1024)
         .toString();
 
     assertThat(actual).contains("deadline=null");
@@ -179,7 +159,6 @@ public class CallOptionsTest {
     assertThat(actual).contains("waitForReady=true");
     assertThat(actual).contains("maxInboundMessageSize=44");
     assertThat(actual).contains("maxOutboundMessageSize=55");
-    assertThat(actual).contains("onReadyThreshold=1024");
     assertThat(actual).contains("streamTracerFactories=[tracerFactory1, tracerFactory2]");
   }
 

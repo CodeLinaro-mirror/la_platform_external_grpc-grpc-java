@@ -54,8 +54,6 @@ import io.grpc.Grpc;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.MethodDescriptor.MethodType;
-import io.grpc.NoopClientCall;
-import io.grpc.NoopServerCall;
 import io.grpc.ServerCall;
 import io.grpc.ServerCallHandler;
 import io.grpc.Status;
@@ -69,6 +67,8 @@ import io.grpc.binarylog.v1.Message;
 import io.grpc.binarylog.v1.MetadataEntry;
 import io.grpc.binarylog.v1.ServerHeader;
 import io.grpc.binarylog.v1.Trailer;
+import io.grpc.internal.NoopClientCall;
+import io.grpc.internal.NoopServerCall;
 import io.grpc.protobuf.StatusProto;
 import io.grpc.protobuf.services.BinlogHelper.FactoryImpl;
 import io.grpc.protobuf.services.BinlogHelper.MaybeTruncated;
@@ -92,7 +92,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 
 /** Tests for {@link BinlogHelper}. */
-@SuppressWarnings("AddressSelection") // It will only be one address
 @RunWith(JUnit4.class)
 public final class BinlogHelperTest {
   private static final Charset US_ASCII = Charset.forName("US-ASCII");
@@ -888,7 +887,7 @@ public final class BinlogHelperTest {
       verify(sink).write(base);
     }
 
-    // server message
+    // server messsage
     {
       sinkWriterImpl.logRpcMessage(
           seq,
@@ -1433,16 +1432,16 @@ public final class BinlogHelperTest {
 
     // send server header
     {
-      Metadata serverInitial = new Metadata();
-      interceptedCall.get().sendHeaders(serverInitial);
+      Metadata serverInital = new Metadata();
+      interceptedCall.get().sendHeaders(serverInital);
       verify(mockSinkWriter).logServerHeader(
           /*seq=*/ eq(2L),
-          same(serverInitial),
+          same(serverInital),
           eq(Logger.LOGGER_SERVER),
           eq(CALL_ID),
           ArgumentMatchers.<SocketAddress>isNull());
       verifyNoMoreInteractions(mockSinkWriter);
-      assertSame(serverInitial, actualServerInitial.get());
+      assertSame(serverInital, actualServerInitial.get());
     }
 
     // receive client msg

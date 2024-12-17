@@ -17,6 +17,8 @@
 package io.grpc.netty;
 
 import java.lang.reflect.Method;
+import java.security.AccessController;
+import java.security.PrivilegedExceptionAction;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 
@@ -40,7 +42,13 @@ final class JettyTlsUtil {
         SSLContext context = SSLContext.getInstance("TLS");
         context.init(null, null, null);
         SSLEngine engine = context.createSSLEngine();
-        Method getApplicationProtocol = SSLEngine.class.getMethod("getApplicationProtocol");
+        Method getApplicationProtocol =
+            AccessController.doPrivileged(new PrivilegedExceptionAction<Method>() {
+              @Override
+              public Method run() throws Exception {
+                return SSLEngine.class.getMethod("getApplicationProtocol");
+              }
+            });
         getApplicationProtocol.invoke(engine);
         return null;
       } catch (Throwable t) {

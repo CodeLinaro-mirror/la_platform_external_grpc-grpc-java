@@ -157,9 +157,10 @@ final class ManagedChannelOrphanWrapper extends ForwardingManagedChannel {
           Level level = Level.SEVERE;
           if (logger.isLoggable(level)) {
             String fmt =
-                "*~*~*~ Previous channel {0} was garbage collected without being shut down! ~*~*~*"
+                "*~*~*~ Previous channel {0} was not shutdown properly!!! ~*~*~*"
                     + System.getProperty("line.separator")
-                    + "    Make sure to call shutdown()/shutdownNow()";
+                    + "    Make sure to call shutdown()/shutdownNow() and wait "
+                    + "until awaitTermination() returns true.";
             LogRecord lr = new LogRecord(level, fmt);
             lr.setLoggerName(logger.getName());
             lr.setParameters(new Object[] {ref.channelStr});

@@ -34,7 +34,7 @@ public final class UdsNameResolverProvider extends NameResolverProvider {
   @Override
   public UdsNameResolver newNameResolver(URI targetUri, NameResolver.Args args) {
     if (SCHEME.equals(targetUri.getScheme())) {
-      return new UdsNameResolver(targetUri.getAuthority(), getTargetPathFromUri(targetUri), args);
+      return new UdsNameResolver(targetUri.getAuthority(), getTargetPathFromUri(targetUri));
     } else {
       return null;
     }
@@ -65,7 +65,7 @@ public final class UdsNameResolverProvider extends NameResolverProvider {
   }
 
   @Override
-  public Collection<Class<? extends SocketAddress>> getProducedSocketAddressTypes() {
+  protected Collection<Class<? extends SocketAddress>> getProducedSocketAddressTypes() {
     return Collections.singleton(DomainSocketAddress.class);
   }
 }

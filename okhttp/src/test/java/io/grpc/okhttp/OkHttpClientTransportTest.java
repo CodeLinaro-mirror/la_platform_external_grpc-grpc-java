@@ -16,6 +16,7 @@
 
 package io.grpc.okhttp;
 
+import static com.google.common.base.Charsets.UTF_8;
 import static com.google.common.truth.Truth.assertThat;
 import static io.grpc.internal.ClientStreamListener.RpcProgress.MISCARRIED;
 import static io.grpc.internal.ClientStreamListener.RpcProgress.PROCESSED;
@@ -24,7 +25,6 @@ import static io.grpc.okhttp.Headers.CONTENT_TYPE_HEADER;
 import static io.grpc.okhttp.Headers.HTTP_SCHEME_HEADER;
 import static io.grpc.okhttp.Headers.METHOD_HEADER;
 import static io.grpc.okhttp.Headers.TE_HEADER;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -247,28 +247,6 @@ public class OkHttpClientTransportTest {
     assertTrue("Unexpected: " + s, s.contains(address.toString()));
   }
 
-  @Test
-  public void testTransportExecutorWithTooFewThreads() throws Exception {
-    ExecutorService fixedPoolExecutor = Executors.newFixedThreadPool(1);
-    channelBuilder.transportExecutor(fixedPoolExecutor);
-    InetSocketAddress address = InetSocketAddress.createUnresolved("hostname", 31415);
-    clientTransport = new OkHttpClientTransport(
-        channelBuilder.buildTransportFactory(),
-        address,
-        "hostname",
-        null,
-        EAG_ATTRS,
-        NO_PROXY,
-        tooManyPingsRunnable);
-    clientTransport.start(transportListener);
-    ArgumentCaptor<Status> statusCaptor = ArgumentCaptor.forClass(Status.class);
-    verify(transportListener, timeout(TIME_OUT_MS)).transportShutdown(statusCaptor.capture());
-    Status capturedStatus = statusCaptor.getValue();
-    assertEquals("Timed out waiting for second handshake thread. "
-        + "The transport executor pool may have run out of threads",
-        capturedStatus.getDescription());
-  }
-
   /**
    * Test logging is functioning correctly for client received Http/2 frames. Not intended to test
    * actual frame content being logged.
@@ -313,16 +291,14 @@ public class OkHttpClientTransportTest {
 
     final String message = "Hello Client";
     Buffer buffer = createMessageFrame(message);
-    frameHandler().data(false, 3, buffer, (int) buffer.size(),
-        (int) buffer.size());
+    frameHandler().data(false, 3, buffer, (int) buffer.size());
     assertThat(logs).hasSize(1);
     log = logs.remove(0);
     assertThat(log.getMessage()).startsWith(Direction.INBOUND + " DATA: streamId=" + 3);
     assertThat(log.getLevel()).isEqualTo(Level.FINE);
 
     // At most 64 bytes of data frame will be logged.
-    frameHandler().data(false, 3, createMessageFrame(new String(new char[1000])),
-        1000, 1000);
+    frameHandler().data(false, 3, createMessageFrame(new String(new char[1000])), 1000);
     assertThat(logs).hasSize(1);
     log = logs.remove(0);
     String data = log.getMessage();
@@ -401,8 +377,7 @@ public class OkHttpClientTransportTest {
     // Receive the message.
     final String message = "Hello Client";
     Buffer buffer = createMessageFrame(message);
-    frameHandler().data(false, 3, buffer, (int) buffer.size(),
-        (int) buffer.size());
+    frameHandler().data(false, 3, buffer, (int) buffer.size());
 
     listener.waitUntilStreamClosed();
     assertEquals(Code.RESOURCE_EXHAUSTED, listener.status.getCode());
@@ -525,8 +500,7 @@ public class OkHttpClientTransportTest {
     assertNotNull(listener.headers);
     for (int i = 0; i < numMessages; i++) {
       Buffer buffer = createMessageFrame(message + i);
-      frameHandler().data(false, 3, buffer, (int) buffer.size(),
-          (int) buffer.size());
+      frameHandler().data(false, 3, buffer, (int) buffer.size());
     }
     frameHandler().headers(true, true, 3, 0, grpcResponseTrailers(), HeadersMode.HTTP_20_HEADERS);
     listener.waitUntilStreamClosed();
@@ -555,8 +529,7 @@ public class OkHttpClientTransportTest {
   @Test
   public void receivedDataForInvalidStreamShouldKillConnection() throws Exception {
     initTransport();
-    frameHandler().data(false, 3, createMessageFrame(new String(new char[1000])),
-        1000, 1000);
+    frameHandler().data(false, 3, createMessageFrame(new String(new char[1000])), 1000);
     verify(frameWriter, timeout(TIME_OUT_MS))
         .goAway(eq(0), eq(ErrorCode.PROTOCOL_ERROR), any(byte[].class));
     verify(transportListener).transportShutdown(isA(Status.class));
@@ -578,8 +551,7 @@ public class OkHttpClientTransportTest {
         HeadersMode.HTTP_20_HEADERS);
     // Now wait to receive 1000 bytes of data so we can have a better error message before
     // cancelling the streaam.
-    frameHandler().data(false, 3,
-        createMessageFrame(new String(new char[1000])), 1000, 1000);
+    frameHandler().data(false, 3, createMessageFrame(new String(new char[1000])), 1000);
     verify(frameWriter, timeout(TIME_OUT_MS)).rstStream(eq(3), eq(ErrorCode.CANCEL));
     assertNull(listener.headers);
     assertEquals(Status.INTERNAL.getCode(), listener.status.getCode());
@@ -650,8 +622,7 @@ public class OkHttpClientTransportTest {
     assertContainStream(3);
     frameHandler().headers(false, false, 3, 0, grpcResponseHeaders(), HeadersMode.HTTP_20_HEADERS);
     Buffer buffer = createMessageFrame("a message");
-    frameHandler().data(false, 3, buffer, (int) buffer.size(),
-        (int) buffer.size());
+    frameHandler().data(false, 3, buffer, (int) buffer.size());
     frameHandler().headers(true, true, 3, 0, grpcResponseTrailers(), HeadersMode.HTTP_20_HEADERS);
     frameHandler().rstStream(3, ErrorCode.NO_ERROR);
     stream.request(1);
@@ -791,18 +762,15 @@ public class OkHttpClientTransportTest {
 
     int messageLength = INITIAL_WINDOW_SIZE / 4;
     byte[] fakeMessage = new byte[messageLength];
-    int paddingLength = 2;
 
     // Stream 1 receives a message
-    Buffer buffer = createMessageFrame(fakeMessage, paddingLength);
+    Buffer buffer = createMessageFrame(fakeMessage);
     int messageFrameLength = (int) buffer.size();
-    frameHandler().data(false, 3, buffer, messageFrameLength - paddingLength,
-        messageFrameLength);
+    frameHandler().data(false, 3, buffer, messageFrameLength);
 
     // Stream 2 receives a message
-    buffer = createMessageFrame(fakeMessage, paddingLength);
-    frameHandler().data(false, 5, buffer, messageFrameLength - paddingLength,
-        messageFrameLength);
+    buffer = createMessageFrame(fakeMessage);
+    frameHandler().data(false, 5, buffer, messageFrameLength);
 
     verify(frameWriter, timeout(TIME_OUT_MS))
         .windowUpdate(eq(0), eq((long) 2 * messageFrameLength));
@@ -810,18 +778,17 @@ public class OkHttpClientTransportTest {
 
     // Stream 1 receives another message
     buffer = createMessageFrame(fakeMessage);
-    messageFrameLength = (int) buffer.size();
-    frameHandler().data(false, 3, buffer, messageFrameLength, messageFrameLength);
+    frameHandler().data(false, 3, buffer, messageFrameLength);
 
     verify(frameWriter, timeout(TIME_OUT_MS))
-        .windowUpdate(eq(3), eq((long) 2 * messageFrameLength + paddingLength));
+        .windowUpdate(eq(3), eq((long) 2 * messageFrameLength));
 
     // Stream 2 receives another message
     buffer = createMessageFrame(fakeMessage);
-    frameHandler().data(false, 5, buffer, messageFrameLength, messageFrameLength);
+    frameHandler().data(false, 5, buffer, messageFrameLength);
 
     verify(frameWriter, timeout(TIME_OUT_MS))
-        .windowUpdate(eq(5), eq((long) 2 * messageFrameLength + paddingLength));
+        .windowUpdate(eq(5), eq((long) 2 * messageFrameLength));
     verify(frameWriter, timeout(TIME_OUT_MS))
         .windowUpdate(eq(0), eq((long) 2 * messageFrameLength));
 
@@ -852,8 +819,7 @@ public class OkHttpClientTransportTest {
     frameHandler().headers(false, false, 3, 0, grpcResponseHeaders(), HeadersMode.HTTP_20_HEADERS);
     Buffer buffer = createMessageFrame(fakeMessage);
     long messageFrameLength = buffer.size();
-    frameHandler().data(false, 3, buffer, (int) messageFrameLength,
-        (int) messageFrameLength);
+    frameHandler().data(false, 3, buffer, (int) messageFrameLength);
     ArgumentCaptor<Integer> idCaptor = ArgumentCaptor.forClass(Integer.class);
     verify(frameWriter, timeout(TIME_OUT_MS)).windowUpdate(
         idCaptor.capture(), eq(messageFrameLength));
@@ -1157,8 +1123,7 @@ public class OkHttpClientTransportTest {
     frameHandler().headers(false, false, 3, 0, grpcResponseHeaders(), HeadersMode.HTTP_20_HEADERS);
     final String receivedMessage = "No, you are fine.";
     Buffer buffer = createMessageFrame(receivedMessage);
-    frameHandler().data(false, 3, buffer, (int) buffer.size(),
-        (int) buffer.size());
+    frameHandler().data(false, 3, buffer, (int) buffer.size());
     frameHandler().headers(true, true, 3, 0, grpcResponseTrailers(), HeadersMode.HTTP_20_HEADERS);
     listener1.waitUntilStreamClosed();
     assertEquals(1, listener1.messages.size());
@@ -1189,12 +1154,12 @@ public class OkHttpClientTransportTest {
     assertNotNull(listener.headers);
     String message = "hello";
     Buffer buffer = createMessageFrame(message);
-    frameHandler().data(false, startId, buffer, (int) buffer.size(), (int) buffer.size());
+    frameHandler().data(false, startId, buffer, (int) buffer.size());
 
     getStream(startId).cancel(Status.CANCELLED);
     // Receives the second message after be cancelled.
     buffer = createMessageFrame(message);
-    frameHandler().data(false, startId, buffer, (int) buffer.size(), (int) buffer.size());
+    frameHandler().data(false, startId, buffer, (int) buffer.size());
 
     listener.waitUntilStreamClosed();
     // Should only have the first message delivered.
@@ -1364,7 +1329,7 @@ public class OkHttpClientTransportTest {
     byte[] fakeMessage = new byte[messageLength];
     Buffer buffer = createMessageFrame(fakeMessage);
     int messageFrameLength = (int) buffer.size();
-    frameHandler().data(false, 3, buffer, messageFrameLength, messageFrameLength);
+    frameHandler().data(false, 3, buffer, messageFrameLength);
 
     listener.waitUntilStreamClosed();
     assertEquals(Status.INTERNAL.getCode(), listener.status.getCode());
@@ -1427,8 +1392,7 @@ public class OkHttpClientTransportTest {
     stream.start(listener);
     stream.request(1);
     Buffer buffer = createMessageFrame(new byte[1]);
-    frameHandler().data(false, 3, buffer, (int) buffer.size(),
-        (int) buffer.size());
+    frameHandler().data(false, 3, buffer, (int) buffer.size());
 
     // Trigger the failure by a trailer.
     frameHandler().headers(
@@ -1450,13 +1414,11 @@ public class OkHttpClientTransportTest {
     stream.start(listener);
     stream.request(1);
     Buffer buffer = createMessageFrame(new byte[1]);
-    frameHandler().data(false, 3, buffer, (int) buffer.size(),
-        (int) buffer.size());
+    frameHandler().data(false, 3, buffer, (int) buffer.size());
 
     // Trigger the failure by a data frame.
     buffer = createMessageFrame(new byte[1]);
-    frameHandler().data(true, 3, buffer, (int) buffer.size(),
-        (int) buffer.size());
+    frameHandler().data(true, 3, buffer, (int) buffer.size());
 
     listener.waitUntilStreamClosed();
     assertEquals(Status.INTERNAL.getCode(), listener.status.getCode());
@@ -1474,8 +1436,7 @@ public class OkHttpClientTransportTest {
     stream.start(listener);
     stream.request(1);
     Buffer buffer = createMessageFrame(new byte[1000]);
-    frameHandler().data(false, 3, buffer, (int) buffer.size(),
-        (int) buffer.size());
+    frameHandler().data(false, 3, buffer, (int) buffer.size());
 
     // Once we receive enough detail, we cancel the stream. so we should have sent cancel.
     verify(frameWriter, timeout(TIME_OUT_MS)).rstStream(eq(3), eq(ErrorCode.CANCEL));
@@ -1498,8 +1459,7 @@ public class OkHttpClientTransportTest {
 
     Buffer buffer = createMessageFrame(
         new byte[INITIAL_WINDOW_SIZE / 2 + 1]);
-    frameHandler().data(false, 3, buffer, (int) buffer.size(),
-        (int) buffer.size());
+    frameHandler().data(false, 3, buffer, (int) buffer.size());
     // Should still update the connection window even stream 3 is gone.
     verify(frameWriter, timeout(TIME_OUT_MS)).windowUpdate(0,
         HEADER_LENGTH + INITIAL_WINDOW_SIZE / 2 + 1);
@@ -1507,8 +1467,7 @@ public class OkHttpClientTransportTest {
         new byte[INITIAL_WINDOW_SIZE / 2 + 1]);
 
     // This should kill the connection, since we never created stream 5.
-    frameHandler().data(false, 5, buffer, (int) buffer.size(),
-        (int) buffer.size());
+    frameHandler().data(false, 5, buffer, (int) buffer.size());
     verify(frameWriter, timeout(TIME_OUT_MS))
         .goAway(eq(0), eq(ErrorCode.PROTOCOL_ERROR), any(byte[].class));
     verify(transportListener).transportShutdown(isA(Status.class));
@@ -2102,26 +2061,6 @@ public class OkHttpClientTransportTest {
     assertEquals(MISCARRIED, listener3.rpcProgress);
   }
 
-  @Test
-  public void finishedStreamRemovedFromInUseState() throws Exception {
-    initTransport();
-    setMaxConcurrentStreams(1);
-    final MockStreamListener listener = new MockStreamListener();
-    OkHttpClientStream stream =
-        clientTransport.newStream(method, new Metadata(), CallOptions.DEFAULT, tracers);
-    stream.start(listener);
-    OkHttpClientStream pendingStream =
-        clientTransport.newStream(method, new Metadata(), CallOptions.DEFAULT, tracers);
-    pendingStream.start(listener);
-    waitForStreamPending(1);
-    clientTransport.finishStream(stream.transportState().id(), Status.OK, PROCESSED,
-        false, null, null);
-    verify(transportListener).transportInUse(true);
-    clientTransport.finishStream(pendingStream.transportState().id(), Status.OK, PROCESSED,
-        false, null, null);
-    verify(transportListener).transportInUse(false);
-  }
-
   private int activeStreamCount() {
     return clientTransport.getActiveStreams().length;
   }
@@ -2175,15 +2114,10 @@ public class OkHttpClientTransportTest {
   }
 
   private static Buffer createMessageFrame(byte[] message) {
-    return createMessageFrame(message,0);
-  }
-
-  private static Buffer createMessageFrame(byte[] message, int paddingLength) {
     Buffer buffer = new Buffer();
     buffer.writeByte(0 /* UNCOMPRESSED */);
     buffer.writeInt(message.length);
     buffer.write(message);
-    buffer.write(new byte[paddingLength]);
     return buffer;
   }
 

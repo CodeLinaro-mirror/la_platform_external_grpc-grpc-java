@@ -18,7 +18,7 @@ package io.grpc.xds;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static io.grpc.xds.client.Bootstrapper.XDSTP_SCHEME;
+import static io.grpc.xds.Bootstrapper.XDSTP_SCHEME;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
@@ -41,13 +41,14 @@ import io.grpc.InternalLogId;
 import io.grpc.LoadBalancer.PickSubchannelArgs;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
-import io.grpc.MetricRecorder;
 import io.grpc.NameResolver;
 import io.grpc.Status;
 import io.grpc.Status.Code;
 import io.grpc.SynchronizationContext;
 import io.grpc.internal.GrpcUtil;
 import io.grpc.internal.ObjectPool;
+import io.grpc.xds.Bootstrapper.AuthorityInfo;
+import io.grpc.xds.Bootstrapper.BootstrapInfo;
 import io.grpc.xds.ClusterSpecifierPlugin.PluginConfig;
 import io.grpc.xds.Filter.ClientInterceptorBuilder;
 import io.grpc.xds.Filter.FilterConfig;
@@ -59,15 +60,12 @@ import io.grpc.xds.VirtualHost.Route.RouteAction;
 import io.grpc.xds.VirtualHost.Route.RouteAction.ClusterWeight;
 import io.grpc.xds.VirtualHost.Route.RouteAction.HashPolicy;
 import io.grpc.xds.VirtualHost.Route.RouteAction.RetryPolicy;
+import io.grpc.xds.XdsClient.ResourceWatcher;
+import io.grpc.xds.XdsListenerResource.LdsUpdate;
+import io.grpc.xds.XdsLogger.XdsLogLevel;
 import io.grpc.xds.XdsNameResolverProvider.CallCounterProvider;
+import io.grpc.xds.XdsNameResolverProvider.XdsClientPoolFactory;
 import io.grpc.xds.XdsRouteConfigureResource.RdsUpdate;
-import io.grpc.xds.client.Bootstrapper.AuthorityInfo;
-import io.grpc.xds.client.Bootstrapper.BootstrapInfo;
-import io.grpc.xds.client.XdsClient;
-import io.grpc.xds.client.XdsClient.ResourceWatcher;
-import io.grpc.xds.client.XdsLogger;
-import io.grpc.xds.client.XdsLogger.XdsLogLevel;
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -97,8 +95,6 @@ final class XdsNameResolver extends NameResolver {
       CallOptions.Key.create("io.grpc.xds.CLUSTER_SELECTION_KEY");
   static final CallOptions.Key<Long> RPC_HASH_KEY =
       CallOptions.Key.create("io.grpc.xds.RPC_HASH_KEY");
-  static final CallOptions.Key<Boolean> AUTO_HOST_REWRITE_KEY =
-      CallOptions.Key.create("io.grpc.xds.AUTO_HOST_REWRITE_KEY");
   @VisibleForTesting
   static boolean enableTimeout =
       Strings.isNullOrEmpty(System.getenv("GRPC_XDS_EXPERIMENTAL_ENABLE_TIMEOUT"))
@@ -108,11 +104,7 @@ final class XdsNameResolver extends NameResolver {
   private final XdsLogger logger;
   @Nullable
   private final String targetAuthority;
-  private final String target;
   private final String serviceAuthority;
-  // Encoded version of the service authority as per 
-  // https://datatracker.ietf.org/doc/html/rfc3986#section-3.2.
-  private final String encodedServiceAuthority;
   private final String overrideAuthority;
   private final ServiceConfigParser serviceConfigParser;
   private final SynchronizationContext syncContext;
@@ -126,7 +118,6 @@ final class XdsNameResolver extends NameResolver {
   private final ConcurrentMap<String, ClusterRefState> clusterRefs = new ConcurrentHashMap<>();
   private final ConfigSelector configSelector = new ConfigSelector();
   private final long randomChannelId;
-  private final MetricRecorder metricRecorder;
 
   private volatile RoutingConfig routingConfig = RoutingConfig.empty;
   private Listener2 listener;
@@ -139,33 +130,24 @@ final class XdsNameResolver extends NameResolver {
   private boolean receivedConfig;
 
   XdsNameResolver(
-      URI targetUri, String name, @Nullable String overrideAuthority,
+      @Nullable String targetAuthority, String name, @Nullable String overrideAuthority,
       ServiceConfigParser serviceConfigParser,
       SynchronizationContext syncContext, ScheduledExecutorService scheduler,
-      @Nullable Map<String, ?> bootstrapOverride,
-      MetricRecorder metricRecorder) {
-    this(targetUri, targetUri.getAuthority(), name, overrideAuthority, serviceConfigParser,
-        syncContext, scheduler, SharedXdsClientPoolProvider.getDefaultProvider(),
-        ThreadSafeRandomImpl.instance, FilterRegistry.getDefaultRegistry(), bootstrapOverride,
-        metricRecorder);
+      @Nullable Map<String, ?> bootstrapOverride) {
+    this(targetAuthority, name, overrideAuthority, serviceConfigParser, syncContext, scheduler,
+        SharedXdsClientPoolProvider.getDefaultProvider(), ThreadSafeRandomImpl.instance,
+        FilterRegistry.getDefaultRegistry(), bootstrapOverride);
   }
 
   @VisibleForTesting
   XdsNameResolver(
-      URI targetUri, @Nullable String targetAuthority, String name,
-      @Nullable String overrideAuthority, ServiceConfigParser serviceConfigParser,
+      @Nullable String targetAuthority, String name, @Nullable String overrideAuthority,
+      ServiceConfigParser serviceConfigParser,
       SynchronizationContext syncContext, ScheduledExecutorService scheduler,
       XdsClientPoolFactory xdsClientPoolFactory, ThreadSafeRandom random,
-      FilterRegistry filterRegistry, @Nullable Map<String, ?> bootstrapOverride,
-      MetricRecorder metricRecorder) {
+      FilterRegistry filterRegistry, @Nullable Map<String, ?> bootstrapOverride) {
     this.targetAuthority = targetAuthority;
-    target = targetUri.toString();
-
-    // The name might have multiple slashes so encode it before verifying.
-    serviceAuthority = checkNotNull(name, "name");
-    this.encodedServiceAuthority = 
-      GrpcUtil.checkAuthority(GrpcUtil.AuthorityEscaper.encodeAuthority(serviceAuthority));
-
+    serviceAuthority = GrpcUtil.checkAuthority(checkNotNull(name, "name"));
     this.overrideAuthority = overrideAuthority;
     this.serviceConfigParser = checkNotNull(serviceConfigParser, "serviceConfigParser");
     this.syncContext = checkNotNull(syncContext, "syncContext");
@@ -175,7 +157,6 @@ final class XdsNameResolver extends NameResolver {
     this.xdsClientPoolFactory.setBootstrapOverride(bootstrapOverride);
     this.random = checkNotNull(random, "random");
     this.filterRegistry = checkNotNull(filterRegistry, "filterRegistry");
-    this.metricRecorder = metricRecorder;
     randomChannelId = random.nextLong();
     logId = InternalLogId.allocate("xds-resolver", name);
     logger = XdsLogger.withLogId(logId);
@@ -184,14 +165,14 @@ final class XdsNameResolver extends NameResolver {
 
   @Override
   public String getServiceAuthority() {
-    return encodedServiceAuthority;
+    return serviceAuthority;
   }
 
   @Override
   public void start(Listener2 listener) {
     this.listener = checkNotNull(listener, "listener");
     try {
-      xdsClientPool = xdsClientPoolFactory.getOrCreate(target, metricRecorder);
+      xdsClientPool = xdsClientPoolFactory.getOrCreate();
     } catch (Exception e) {
       listener.onError(
           Status.UNAVAILABLE.withDescription("Failed to initialize xDS").withCause(e));
@@ -225,7 +206,6 @@ final class XdsNameResolver extends NameResolver {
     ldsResourceName = XdsClient.canonifyResourceName(ldsResourceName);
     callCounterProvider = SharedCallCounterMap.getInstance();
     resolveState = new ResolveState(ldsResourceName);
-
     resolveState.start();
   }
 
@@ -474,18 +454,14 @@ final class XdsNameResolver extends NameResolver {
       }
       final String finalCluster = cluster;
       final long hash = generateHash(selectedRoute.routeAction().hashPolicies(), headers);
-      Route finalSelectedRoute = selectedRoute;
       class ClusterSelectionInterceptor implements ClientInterceptor {
         @Override
         public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
             final MethodDescriptor<ReqT, RespT> method, CallOptions callOptions,
             final Channel next) {
-          CallOptions callOptionsForCluster =
+          final CallOptions callOptionsForCluster =
               callOptions.withOption(CLUSTER_SELECTION_KEY, finalCluster)
                   .withOption(RPC_HASH_KEY, hash);
-          if (finalSelectedRoute.routeAction().autoHostRewrite()) {
-            callOptionsForCluster = callOptionsForCluster.withOption(AUTO_HOST_REWRITE_KEY, true);
-          }
           return new SimpleForwardingClientCall<ReqT, RespT>(
               next.newCall(method, callOptionsForCluster)) {
             @Override
@@ -638,7 +614,7 @@ final class XdsNameResolver extends NameResolver {
     }
   }
 
-  private class ResolveState implements ResourceWatcher<XdsListenerResource.LdsUpdate> {
+  private class ResolveState implements ResourceWatcher<LdsUpdate> {
     private final ConfigOrError emptyServiceConfig =
         serviceConfigParser.parseServiceConfig(Collections.<String, Object>emptyMap());
     private final String ldsResourceName;
@@ -653,53 +629,67 @@ final class XdsNameResolver extends NameResolver {
     }
 
     @Override
-    public void onChanged(final XdsListenerResource.LdsUpdate update) {
-      if (stopped) {
-        return;
-      }
-      logger.log(XdsLogLevel.INFO, "Receive LDS resource update: {0}", update);
-      HttpConnectionManager httpConnectionManager = update.httpConnectionManager();
-      List<VirtualHost> virtualHosts = httpConnectionManager.virtualHosts();
-      String rdsName = httpConnectionManager.rdsName();
-      cleanUpRouteDiscoveryState();
-      if (virtualHosts != null) {
-        updateRoutes(virtualHosts, httpConnectionManager.httpMaxStreamDurationNano(),
-            httpConnectionManager.httpFilterConfigs());
-      } else {
-        routeDiscoveryState = new RouteDiscoveryState(
-            rdsName, httpConnectionManager.httpMaxStreamDurationNano(),
-            httpConnectionManager.httpFilterConfigs());
-        logger.log(XdsLogLevel.INFO, "Start watching RDS resource {0}", rdsName);
-        xdsClient.watchXdsResource(XdsRouteConfigureResource.getInstance(),
-            rdsName, routeDiscoveryState, syncContext);
-      }
+    public void onChanged(final LdsUpdate update) {
+      syncContext.execute(new Runnable() {
+        @Override
+        public void run() {
+          if (stopped) {
+            return;
+          }
+          logger.log(XdsLogLevel.INFO, "Receive LDS resource update: {0}", update);
+          HttpConnectionManager httpConnectionManager = update.httpConnectionManager();
+          List<VirtualHost> virtualHosts = httpConnectionManager.virtualHosts();
+          String rdsName = httpConnectionManager.rdsName();
+          cleanUpRouteDiscoveryState();
+          if (virtualHosts != null) {
+            updateRoutes(virtualHosts, httpConnectionManager.httpMaxStreamDurationNano(),
+                httpConnectionManager.httpFilterConfigs());
+          } else {
+            routeDiscoveryState = new RouteDiscoveryState(
+                rdsName, httpConnectionManager.httpMaxStreamDurationNano(),
+                httpConnectionManager.httpFilterConfigs());
+            logger.log(XdsLogLevel.INFO, "Start watching RDS resource {0}", rdsName);
+            xdsClient.watchXdsResource(XdsRouteConfigureResource.getInstance(),
+                rdsName, routeDiscoveryState);
+          }
+        }
+      });
     }
 
     @Override
     public void onError(final Status error) {
-      if (stopped || receivedConfig) {
-        return;
-      }
-      listener.onError(Status.UNAVAILABLE.withCause(error.getCause()).withDescription(
-          String.format("Unable to load LDS %s. xDS server returned: %s: %s",
-          ldsResourceName, error.getCode(), error.getDescription())));
+      syncContext.execute(new Runnable() {
+        @Override
+        public void run() {
+          if (stopped || receivedConfig) {
+            return;
+          }
+          listener.onError(Status.UNAVAILABLE.withCause(error.getCause()).withDescription(
+              String.format("Unable to load LDS %s. xDS server returned: %s: %s",
+              ldsResourceName, error.getCode(), error.getDescription())));
+        }
+      });
     }
 
     @Override
     public void onResourceDoesNotExist(final String resourceName) {
-      if (stopped) {
-        return;
-      }
-      String error = "LDS resource does not exist: " + resourceName;
-      logger.log(XdsLogLevel.INFO, error);
-      cleanUpRouteDiscoveryState();
-      cleanUpRoutes(error);
+      syncContext.execute(new Runnable() {
+        @Override
+        public void run() {
+          if (stopped) {
+            return;
+          }
+          String error = "LDS resource does not exist: " + resourceName;
+          logger.log(XdsLogLevel.INFO, error);
+          cleanUpRouteDiscoveryState();
+          cleanUpRoutes(error);
+        }
+      });
     }
 
     private void start() {
       logger.log(XdsLogLevel.INFO, "Start watching LDS resource {0}", ldsResourceName);
-      xdsClient.watchXdsResource(XdsListenerResource.getInstance(),
-          ldsResourceName, this, syncContext);
+      xdsClient.watchXdsResource(XdsListenerResource.getInstance(), ldsResourceName, this);
     }
 
     private void stop() {
@@ -712,7 +702,7 @@ final class XdsNameResolver extends NameResolver {
     // called in syncContext
     private void updateRoutes(List<VirtualHost> virtualHosts, long httpMaxStreamDurationNano,
         @Nullable List<NamedFilterConfig> filterConfigs) {
-      String authority = overrideAuthority != null ? overrideAuthority : encodedServiceAuthority;
+      String authority = overrideAuthority != null ? overrideAuthority : ldsResourceName;
       VirtualHost virtualHost = RoutingUtils.findVirtualHostForHostName(virtualHosts, authority);
       if (virtualHost == null) {
         String error = "Failed to find virtual host matching hostname: " + authority;
@@ -828,12 +818,10 @@ final class XdsNameResolver extends NameResolver {
       // the config selector handles the error message itself. Once the LB API allows providing
       // failure information for addresses yet still providing a service config, the config seector
       // could be avoided.
-      String errorWithNodeId =
-          error + ", xDS node ID: " + xdsClient.getBootstrapInfo().node().getId();
       listener.onResult(ResolutionResult.newBuilder()
           .setAttributes(Attributes.newBuilder()
             .set(InternalConfigSelector.KEY,
-              new FailingConfigSelector(Status.UNAVAILABLE.withDescription(errorWithNodeId)))
+              new FailingConfigSelector(Status.UNAVAILABLE.withDescription(error)))
             .build())
           .setServiceConfig(emptyServiceConfig)
           .build());
@@ -869,31 +857,47 @@ final class XdsNameResolver extends NameResolver {
 
       @Override
       public void onChanged(final RdsUpdate update) {
-        if (RouteDiscoveryState.this != routeDiscoveryState) {
-          return;
-        }
-        logger.log(XdsLogLevel.INFO, "Received RDS resource update: {0}", update);
-        updateRoutes(update.virtualHosts, httpMaxStreamDurationNano, filterConfigs);
+        syncContext.execute(new Runnable() {
+          @Override
+          public void run() {
+            if (RouteDiscoveryState.this != routeDiscoveryState) {
+              return;
+            }
+            logger.log(XdsLogLevel.INFO, "Received RDS resource update: {0}", update);
+            updateRoutes(update.virtualHosts, httpMaxStreamDurationNano,
+                filterConfigs);
+          }
+        });
       }
 
       @Override
       public void onError(final Status error) {
-        if (RouteDiscoveryState.this != routeDiscoveryState || receivedConfig) {
-          return;
-        }
-        listener.onError(Status.UNAVAILABLE.withCause(error.getCause()).withDescription(
-            String.format("Unable to load RDS %s. xDS server returned: %s: %s",
-            resourceName, error.getCode(), error.getDescription())));
+        syncContext.execute(new Runnable() {
+          @Override
+          public void run() {
+            if (RouteDiscoveryState.this != routeDiscoveryState || receivedConfig) {
+              return;
+            }
+            listener.onError(Status.UNAVAILABLE.withCause(error.getCause()).withDescription(
+                String.format("Unable to load RDS %s. xDS server returned: %s: %s",
+                resourceName, error.getCode(), error.getDescription())));
+          }
+        });
       }
 
       @Override
       public void onResourceDoesNotExist(final String resourceName) {
-        if (RouteDiscoveryState.this != routeDiscoveryState) {
-          return;
-        }
-        String error = "RDS resource does not exist: " + resourceName;
-        logger.log(XdsLogLevel.INFO, error);
-        cleanUpRoutes(error);
+        syncContext.execute(new Runnable() {
+          @Override
+          public void run() {
+            if (RouteDiscoveryState.this != routeDiscoveryState) {
+              return;
+            }
+            String error = "RDS resource does not exist: " + resourceName;
+            logger.log(XdsLogLevel.INFO, error);
+            cleanUpRoutes(error);
+          }
+        });
       }
     }
   }

@@ -42,7 +42,6 @@ import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.servlet.ServletHolder;
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -53,7 +52,6 @@ public class GrpcServletSmokeTest {
   private static final String HOST = "localhost";
   private static final String MYAPP = "/grpc.testing.TestService";
 
-  @Rule
   public final GrpcCleanupRule cleanupRule = new GrpcCleanupRule();
   private final ScheduledExecutorService scheduledExecutorService =
       Executors.newSingleThreadScheduledExecutor();

@@ -166,34 +166,29 @@ abstract class VirtualHost {
       @Nullable
       abstract RetryPolicy retryPolicy();
 
-      abstract boolean autoHostRewrite();
-
       static RouteAction forCluster(
           String cluster, List<HashPolicy> hashPolicies, @Nullable Long timeoutNano,
-          @Nullable RetryPolicy retryPolicy, boolean autoHostRewrite) {
+          @Nullable RetryPolicy retryPolicy) {
         checkNotNull(cluster, "cluster");
-        return RouteAction.create(hashPolicies, timeoutNano, cluster, null, null, retryPolicy,
-            autoHostRewrite);
+        return RouteAction.create(hashPolicies, timeoutNano, cluster, null, null, retryPolicy);
       }
 
       static RouteAction forWeightedClusters(
           List<ClusterWeight> weightedClusters, List<HashPolicy> hashPolicies,
-          @Nullable Long timeoutNano, @Nullable RetryPolicy retryPolicy, boolean autoHostRewrite) {
+          @Nullable Long timeoutNano, @Nullable RetryPolicy retryPolicy) {
         checkNotNull(weightedClusters, "weightedClusters");
         checkArgument(!weightedClusters.isEmpty(), "empty cluster list");
         return RouteAction.create(
-            hashPolicies, timeoutNano, null, weightedClusters, null, retryPolicy, autoHostRewrite);
+            hashPolicies, timeoutNano, null, weightedClusters, null, retryPolicy);
       }
 
       static RouteAction forClusterSpecifierPlugin(
           NamedPluginConfig namedConfig,
           List<HashPolicy> hashPolicies,
           @Nullable Long timeoutNano,
-          @Nullable RetryPolicy retryPolicy,
-          boolean autoHostRewrite) {
+          @Nullable RetryPolicy retryPolicy) {
         checkNotNull(namedConfig, "namedConfig");
-        return RouteAction.create(hashPolicies, timeoutNano, null, null, namedConfig, retryPolicy,
-            autoHostRewrite);
+        return RouteAction.create(hashPolicies, timeoutNano, null, null, namedConfig, retryPolicy);
       }
 
       private static RouteAction create(
@@ -202,16 +197,14 @@ abstract class VirtualHost {
           @Nullable String cluster,
           @Nullable List<ClusterWeight> weightedClusters,
           @Nullable NamedPluginConfig namedConfig,
-          @Nullable RetryPolicy retryPolicy,
-          boolean autoHostRewrite) {
+          @Nullable RetryPolicy retryPolicy) {
         return new AutoValue_VirtualHost_Route_RouteAction(
             ImmutableList.copyOf(hashPolicies),
             timeoutNano,
             cluster,
             weightedClusters == null ? null : ImmutableList.copyOf(weightedClusters),
             namedConfig,
-            retryPolicy,
-            autoHostRewrite);
+            retryPolicy);
       }
 
       @AutoValue

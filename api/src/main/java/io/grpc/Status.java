@@ -16,10 +16,10 @@
 
 package io.grpc;
 
+import static com.google.common.base.Charsets.US_ASCII;
+import static com.google.common.base.Charsets.UTF_8;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Throwables.getStackTraceAsString;
-import static java.nio.charset.StandardCharsets.US_ASCII;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
@@ -33,6 +33,7 @@ import java.util.TreeMap;
 import javax.annotation.CheckReturnValue;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
+
 
 /**
  * Defines the status of an operation by providing a standard {@link Code} in conjunction with an
@@ -233,6 +234,10 @@ public final class Status {
     }
   }
 
+  private static final String TEST_EQUALS_FAILURE_PROPERTY = "io.grpc.Status.failOnEqualsForTest";
+  private static final boolean FAIL_ON_EQUALS_FOR_TEST =
+      Boolean.parseBoolean(System.getProperty(TEST_EQUALS_FAILURE_PROPERTY, "false"));
+  
   // Create the canonical list of Status instances indexed by their code values.
   private static final List<Status> STATUS_LIST = buildStatusList();
 
@@ -413,6 +418,7 @@ public final class Status {
    * @return the trailers or {@code null} if not found.
    */
   @Nullable
+  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/4683")
   public static Metadata trailersFromThrowable(Throwable t) {
     Throwable cause = checkNotNull(t, "t");
     while (cause != null) {
@@ -528,6 +534,7 @@ public final class Status {
    * Same as {@link #asRuntimeException()} but includes the provided trailers in the returned
    * exception.
    */
+  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/4683")
   public StatusRuntimeException asRuntimeException(@Nullable Metadata trailers) {
     return new StatusRuntimeException(this, trailers);
   }
@@ -657,6 +664,8 @@ public final class Status {
    */
   @Override
   public boolean equals(Object obj) {
+    assert !FAIL_ON_EQUALS_FOR_TEST
+        : "Status.equals called; disable this by setting " + TEST_EQUALS_FAILURE_PROPERTY;
     return super.equals(obj);
   }
 

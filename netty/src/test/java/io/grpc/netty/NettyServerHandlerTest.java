@@ -16,25 +16,23 @@
 
 package io.grpc.netty;
 
+import static com.google.common.base.Charsets.UTF_8;
 import static io.grpc.internal.GrpcUtil.DEFAULT_MAX_MESSAGE_SIZE;
 import static io.grpc.internal.GrpcUtil.DEFAULT_SERVER_KEEPALIVE_TIMEOUT_NANOS;
 import static io.grpc.internal.GrpcUtil.DEFAULT_SERVER_KEEPALIVE_TIME_NANOS;
 import static io.grpc.netty.NettyServerBuilder.MAX_CONNECTION_AGE_GRACE_NANOS_INFINITE;
 import static io.grpc.netty.NettyServerBuilder.MAX_CONNECTION_AGE_NANOS_DISABLED;
 import static io.grpc.netty.NettyServerBuilder.MAX_CONNECTION_IDLE_NANOS_DISABLED;
-import static io.grpc.netty.NettyServerBuilder.MAX_RST_COUNT_DISABLED;
 import static io.grpc.netty.Utils.CONTENT_TYPE_GRPC;
 import static io.grpc.netty.Utils.CONTENT_TYPE_HEADER;
 import static io.grpc.netty.Utils.HTTP_METHOD;
 import static io.grpc.netty.Utils.TE_HEADER;
 import static io.grpc.netty.Utils.TE_TRAILERS;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.any;
@@ -87,12 +85,9 @@ import io.netty.handler.codec.http2.Http2Settings;
 import io.netty.handler.codec.http2.Http2Stream;
 import io.netty.util.AsciiString;
 import java.io.InputStream;
-import java.nio.channels.ClosedChannelException;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.TimeUnit;
 import org.junit.Before;
@@ -141,7 +136,6 @@ public class NettyServerHandlerTest extends NettyHandlerTestBase<NettyServerHand
 
   private int maxConcurrentStreams = Integer.MAX_VALUE;
   private int maxHeaderListSize = Integer.MAX_VALUE;
-  private int softLimitHeaderListSize = Integer.MAX_VALUE;
   private boolean permitKeepAliveWithoutCalls = true;
   private long permitKeepAliveTimeInNanos = 0;
   private long maxConnectionIdleInNanos = MAX_CONNECTION_IDLE_NANOS_DISABLED;
@@ -149,8 +143,6 @@ public class NettyServerHandlerTest extends NettyHandlerTestBase<NettyServerHand
   private long maxConnectionAgeGraceInNanos = MAX_CONNECTION_AGE_GRACE_NANOS_INFINITE;
   private long keepAliveTimeInNanos = DEFAULT_SERVER_KEEPALIVE_TIME_NANOS;
   private long keepAliveTimeoutInNanos = DEFAULT_SERVER_KEEPALIVE_TIMEOUT_NANOS;
-  private int maxRstCount = MAX_RST_COUNT_DISABLED;
-  private long maxRstPeriodNanos;
 
   private class ServerTransportListenerImpl implements ServerTransportListener {
 
@@ -187,8 +179,8 @@ public class NettyServerHandlerTest extends NettyHandlerTestBase<NettyServerHand
               return null;
             }
           })
-        .when(streamListener)
-        .messagesAvailable(any(StreamListener.MessageProducer.class));
+      .when(streamListener)
+      .messagesAvailable(any(StreamListener.MessageProducer.class));
   }
 
   @Override
@@ -472,39 +464,9 @@ public class NettyServerHandlerTest extends NettyHandlerTestBase<NettyServerHand
   public void cancelShouldSendRstStream() throws Exception {
     manualSetUp();
     createStream();
-    enqueue(CancelServerStreamCommand.withReset(stream.transportState(), Status.DEADLINE_EXCEEDED));
+    enqueue(new CancelServerStreamCommand(stream.transportState(), Status.DEADLINE_EXCEEDED));
     verifyWrite().writeRstStream(eq(ctx()), eq(stream.transportState().id()),
         eq(Http2Error.CANCEL.code()), any(ChannelPromise.class));
-  }
-
-  @Test
-  public void cancelWithNotify_shouldSendHeaders() throws Exception {
-    manualSetUp();
-    createStream();
-
-    enqueue(CancelServerStreamCommand.withReason(
-            stream.transportState(),
-            Status.RESOURCE_EXHAUSTED.withDescription("my custom description")
-    ));
-
-    ArgumentCaptor<Http2Headers> captor = ArgumentCaptor.forClass(Http2Headers.class);
-    verifyWrite()
-            .writeHeaders(
-                    eq(ctx()),
-                    eq(STREAM_ID),
-                    captor.capture(),
-                    eq(0),
-                    eq(true),
-                    any(ChannelPromise.class));
-
-    // For arcane reasons, the specific implementation of Http2Headers here doesn't actually support
-    // methods like `get(...)`, so we have to manually convert it into a map.
-    Map<String, String> actualHeaders = new HashMap<>();
-    for (Map.Entry<CharSequence, CharSequence> entry : captor.getValue()) {
-      actualHeaders.put(entry.getKey().toString(), entry.getValue().toString());
-    }
-    assertEquals("8", actualHeaders.get(InternalStatus.CODE_KEY.name()));
-    assertEquals("my custom description", actualHeaders.get(InternalStatus.MESSAGE_KEY.name()));
   }
 
   @Test
@@ -670,34 +632,6 @@ public class NettyServerHandlerTest extends NettyHandlerTestBase<NettyServerHand
             eq(0),
             eq(false),
             any(ChannelPromise.class));
-  }
-
-  @Test
-  public void headersWithErrAndEndStreamReturnErrorButNotThrowNpe() throws Exception {
-    manualSetUp();
-    Http2Headers headers = new DefaultHttp2Headers()
-        .method(HTTP_METHOD)
-        .add(AsciiString.of("host"), AsciiString.of("example.com"))
-        .path(new AsciiString("/foo/bar"));
-    ByteBuf headersFrame = headersFrame(STREAM_ID, headers);
-    channelRead(headersFrame);
-    channelRead(emptyGrpcFrame(STREAM_ID, true));
-
-    Http2Headers responseHeaders = new DefaultHttp2Headers()
-        .set(InternalStatus.CODE_KEY.name(), String.valueOf(Code.INTERNAL.value()))
-        .set(InternalStatus.MESSAGE_KEY.name(), "Content-Type is missing from the request")
-        .status("" + 415)
-        .set(CONTENT_TYPE_HEADER, "text/plain; charset=utf-8");
-
-    verifyWrite()
-        .writeHeaders(
-            eq(ctx()),
-            eq(STREAM_ID),
-            eq(responseHeaders),
-            eq(0),
-            eq(false),
-            any(ChannelPromise.class));
-
   }
 
   @Test
@@ -1287,44 +1221,6 @@ public class NettyServerHandlerTest extends NettyHandlerTestBase<NettyServerHand
     assertFalse(channel().isOpen());
   }
 
-  @Test
-  public void maxRstCount_withinLimit_succeeds() throws Exception {
-    maxRstCount = 10;
-    maxRstPeriodNanos = TimeUnit.MILLISECONDS.toNanos(100);
-    manualSetUp();
-    rapidReset(maxRstCount);
-    assertTrue(channel().isOpen());
-  }
-
-  @Test
-  public void maxRstCount_exceedsLimit_fails() throws Exception {
-    maxRstCount = 10;
-    maxRstPeriodNanos = TimeUnit.MILLISECONDS.toNanos(100);
-    manualSetUp();
-    assertThrows(ClosedChannelException.class, () -> rapidReset(maxRstCount + 1));
-    assertFalse(channel().isOpen());
-  }
-
-  private void rapidReset(int burstSize) throws Exception {
-    Http2Headers headers = new DefaultHttp2Headers()
-        .method(HTTP_METHOD)
-        .set(CONTENT_TYPE_HEADER, new AsciiString("application/grpc", UTF_8))
-        .set(TE_HEADER, TE_TRAILERS)
-        .path(new AsciiString("/foo/bar"));
-    int streamId = 1;
-    long rpcTimeNanos = maxRstPeriodNanos / 2 / burstSize;
-    for (int period = 0; period < 3; period++) {
-      for (int i = 0; i < burstSize; i++) {
-        channelRead(headersFrame(streamId, headers));
-        channelRead(rstStreamFrame(streamId, (int) Http2Error.CANCEL.code()));
-        streamId += 2;
-        fakeClock().forwardNanos(rpcTimeNanos);
-      }
-      while (channel().readOutbound() != null) {}
-      fakeClock().forwardNanos(maxRstPeriodNanos - rpcTimeNanos * burstSize + 1);
-    }
-  }
-
   private void createStream() throws Exception {
     Http2Headers headers = new DefaultHttp2Headers()
         .method(HTTP_METHOD)
@@ -1364,7 +1260,6 @@ public class NettyServerHandlerTest extends NettyHandlerTestBase<NettyServerHand
         autoFlowControl,
         flowControlWindow,
         maxHeaderListSize,
-        softLimitHeaderListSize,
         DEFAULT_MAX_MESSAGE_SIZE,
         keepAliveTimeInNanos,
         keepAliveTimeoutInNanos,
@@ -1373,8 +1268,6 @@ public class NettyServerHandlerTest extends NettyHandlerTestBase<NettyServerHand
         maxConnectionAgeGraceInNanos,
         permitKeepAliveWithoutCalls,
         permitKeepAliveTimeInNanos,
-        maxRstCount,
-        maxRstPeriodNanos,
         Attributes.EMPTY,
         fakeClock().getTicker());
   }

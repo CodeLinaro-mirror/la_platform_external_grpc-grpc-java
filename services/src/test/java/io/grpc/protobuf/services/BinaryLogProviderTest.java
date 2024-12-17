@@ -16,8 +16,8 @@
 
 package io.grpc.protobuf.services;
 
+import static com.google.common.base.Charsets.UTF_8;
 import static com.google.common.truth.Truth.assertThat;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -35,12 +35,12 @@ import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.MethodDescriptor.Marshaller;
 import io.grpc.MethodDescriptor.MethodType;
-import io.grpc.NoopClientCall;
-import io.grpc.NoopServerCall;
 import io.grpc.ServerCall;
 import io.grpc.ServerCallHandler;
 import io.grpc.ServerInterceptor;
 import io.grpc.ServerMethodDefinition;
+import io.grpc.internal.NoopClientCall;
+import io.grpc.internal.NoopServerCall;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;

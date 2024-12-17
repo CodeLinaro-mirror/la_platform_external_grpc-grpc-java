@@ -56,10 +56,14 @@ public class LinkedHashLruCacheTest {
     this.cache = new LinkedHashLruCache<Integer, Entry>(
         MAX_SIZE,
         evictionListener,
-        fakeClock.getTicker()) {
+        10,
+        TimeUnit.NANOSECONDS,
+        fakeClock.getScheduledExecutorService(),
+        fakeClock.getTicker(),
+        new Object()) {
       @Override
       protected boolean isExpired(Integer key, Entry value, long nowNanos) {
-        return value.expireTime - nowNanos <= 0;
+        return value.expireTime <= nowNanos;
       }
 
       @Override
@@ -103,11 +107,9 @@ public class LinkedHashLruCacheTest {
     cache.cache(1, survivor);
 
     fakeClock.forwardTime(10, TimeUnit.NANOSECONDS);
-    cache.cleanupExpiredEntries();
     verify(evictionListener).onEviction(0, toBeEvicted, EvictionType.EXPIRED);
 
     fakeClock.forwardTime(10, TimeUnit.NANOSECONDS);
-    cache.cleanupExpiredEntries();
     verify(evictionListener).onEviction(1, survivor, EvictionType.EXPIRED);
   }
 
@@ -148,17 +150,13 @@ public class LinkedHashLruCacheTest {
   }
 
   @Test
-  public void eviction_cleanupShouldRemoveAlreadyExpired() {
+  public void eviction_get_shouldNotReturnAlreadyExpired() {
     for (int i = 1; i <= MAX_SIZE; i++) {
       // last entry is already expired when added
-      cache.cache(i, new Entry("Entry" + i,
-          ticker.read() + ((MAX_SIZE - i) * TimeUnit.MINUTES.toNanos(1)) + 1));
+      cache.cache(i, new Entry("Entry" + i, ticker.read() + MAX_SIZE - i));
     }
 
     assertThat(cache.estimatedSize()).isEqualTo(MAX_SIZE);
-
-    fakeClock.forwardTime(1, TimeUnit.MINUTES);
-    cache.cleanupExpiredEntries();
     assertThat(cache.read(MAX_SIZE)).isNull();
     assertThat(cache.estimatedSize()).isEqualTo(MAX_SIZE - 1);
     verify(evictionListener).onEviction(eq(MAX_SIZE), any(Entry.class), eq(EvictionType.EXPIRED));
