@@ -17,6 +17,10 @@
 package io.grpc.xds;
 
 import io.grpc.Internal;
+import io.grpc.MetricRecorder;
+import io.grpc.internal.ObjectPool;
+import io.grpc.xds.client.XdsClient;
+import io.grpc.xds.client.XdsInitializationException;
 import java.util.Map;
 
 /**
@@ -29,5 +33,15 @@ public final class InternalSharedXdsClientPoolProvider {
 
   public static void setDefaultProviderBootstrapOverride(Map<String, ?> bootstrap) {
     SharedXdsClientPoolProvider.getDefaultProvider().setBootstrapOverride(bootstrap);
+  }
+
+  public static ObjectPool<XdsClient> getOrCreate(String target)
+      throws XdsInitializationException {
+    return getOrCreate(target, new MetricRecorder() {});
+  }
+
+  public static ObjectPool<XdsClient> getOrCreate(String target, MetricRecorder metricRecorder)
+      throws XdsInitializationException {
+    return SharedXdsClientPoolProvider.getDefaultProvider().getOrCreate(target, metricRecorder);
   }
 }

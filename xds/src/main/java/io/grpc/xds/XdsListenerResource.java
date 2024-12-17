@@ -17,10 +17,9 @@
 package io.grpc.xds;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static io.grpc.xds.XdsClient.ResourceUpdate;
-import static io.grpc.xds.XdsClientImpl.ResourceInvalidException;
 import static io.grpc.xds.XdsClusterResource.validateCommonTlsContext;
 import static io.grpc.xds.XdsRouteConfigureResource.extractVirtualHosts;
+import static io.grpc.xds.client.XdsClient.ResourceUpdate;
 
 import com.github.udpa.udpa.type.v1.TypedStruct;
 import com.google.auto.value.AutoValue;
@@ -43,6 +42,7 @@ import io.grpc.xds.EnvoyServerProtoData.FilterChain;
 import io.grpc.xds.EnvoyServerProtoData.FilterChainMatch;
 import io.grpc.xds.Filter.FilterConfig;
 import io.grpc.xds.XdsListenerResource.LdsUpdate;
+import io.grpc.xds.client.XdsResourceType;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -59,14 +59,15 @@ class XdsListenerResource extends XdsResourceType<LdsUpdate> {
           + ".HttpConnectionManager";
   private static final String TRANSPORT_SOCKET_NAME_TLS = "envoy.transport_sockets.tls";
   private static final XdsListenerResource instance = new XdsListenerResource();
+  private static final FilterRegistry filterRegistry = FilterRegistry.getDefaultRegistry();
 
-  public static XdsListenerResource getInstance() {
+  static XdsListenerResource getInstance() {
     return instance;
   }
 
   @Override
   @Nullable
-  String extractResourceName(Message unpackedResource) {
+  protected String extractResourceName(Message unpackedResource) {
     if (!(unpackedResource instanceof Listener)) {
       return null;
     }
@@ -74,27 +75,32 @@ class XdsListenerResource extends XdsResourceType<LdsUpdate> {
   }
 
   @Override
-  String typeName() {
+  public String typeName() {
     return "LDS";
   }
 
   @Override
-  Class<Listener> unpackedClassName() {
+  protected Class<Listener> unpackedClassName() {
     return Listener.class;
   }
 
   @Override
-  String typeUrl() {
+  public String typeUrl() {
     return ADS_TYPE_URL_LDS;
   }
 
   @Override
-  boolean isFullStateOfTheWorld() {
+  public boolean shouldRetrieveResourceKeysForArgs() {
+    return false;
+  }
+
+  @Override
+  protected boolean isFullStateOfTheWorld() {
     return true;
   }
 
   @Override
-  LdsUpdate doParse(Args args, Message unpackedMessage)
+  protected LdsUpdate doParse(Args args, Message unpackedMessage)
       throws ResourceInvalidException {
     if (!(unpackedMessage instanceof Listener)) {
       throw new ResourceInvalidException("Invalid message type: " + unpackedMessage.getClass());
@@ -102,15 +108,13 @@ class XdsListenerResource extends XdsResourceType<LdsUpdate> {
     Listener listener = (Listener) unpackedMessage;
 
     if (listener.hasApiListener()) {
-      return processClientSideListener(
-          listener, args);
+      return processClientSideListener(listener, args);
     } else {
-      return processServerSideListener(
-          listener, args);
+      return processServerSideListener(listener, args);
     }
   }
 
-  private LdsUpdate processClientSideListener(Listener listener, Args args)
+  private LdsUpdate processClientSideListener(Listener listener, XdsResourceType.Args args)
       throws ResourceInvalidException {
     // Unpack HttpConnectionManager from the Listener.
     HttpConnectionManager hcm;
@@ -122,24 +126,25 @@ class XdsListenerResource extends XdsResourceType<LdsUpdate> {
       throw new ResourceInvalidException(
           "Could not parse HttpConnectionManager config from ApiListener", e);
     }
-    return LdsUpdate.forApiListener(parseHttpConnectionManager(
-        hcm, args.filterRegistry, true /* isForClient */));
+    return LdsUpdate.forApiListener(
+        parseHttpConnectionManager(hcm, filterRegistry, true /* isForClient */, args));
   }
 
-  private LdsUpdate processServerSideListener(Listener proto, Args args)
+  private LdsUpdate processServerSideListener(Listener proto, XdsResourceType.Args args)
       throws ResourceInvalidException {
     Set<String> certProviderInstances = null;
-    if (args.bootstrapInfo != null && args.bootstrapInfo.certProviders() != null) {
-      certProviderInstances = args.bootstrapInfo.certProviders().keySet();
+    if (args.getBootstrapInfo() != null && args.getBootstrapInfo().certProviders() != null) {
+      certProviderInstances = args.getBootstrapInfo().certProviders().keySet();
     }
-    return LdsUpdate.forTcpListener(parseServerSideListener(proto, args.tlsContextManager,
-        args.filterRegistry, certProviderInstances));
+    return LdsUpdate.forTcpListener(parseServerSideListener(proto,
+        (TlsContextManager) args.getSecurityConfig(),
+        filterRegistry, certProviderInstances, args));
   }
 
   @VisibleForTesting
   static EnvoyServerProtoData.Listener parseServerSideListener(
       Listener proto, TlsContextManager tlsContextManager,
-      FilterRegistry filterRegistry, Set<String> certProviderInstances)
+      FilterRegistry filterRegistry, Set<String> certProviderInstances, XdsResourceType.Args args)
       throws ResourceInvalidException {
     if (!proto.getTrafficDirection().equals(TrafficDirection.INBOUND)
         && !proto.getTrafficDirection().equals(TrafficDirection.UNSPECIFIED)) {
@@ -177,13 +182,13 @@ class XdsListenerResource extends XdsResourceType<LdsUpdate> {
     for (io.envoyproxy.envoy.config.listener.v3.FilterChain fc : proto.getFilterChainsList()) {
       filterChains.add(
           parseFilterChain(fc, tlsContextManager, filterRegistry, uniqueSet,
-              certProviderInstances));
+              certProviderInstances, args));
     }
     FilterChain defaultFilterChain = null;
     if (proto.hasDefaultFilterChain()) {
       defaultFilterChain = parseFilterChain(
           proto.getDefaultFilterChain(), tlsContextManager, filterRegistry,
-          null, certProviderInstances);
+          null, certProviderInstances, args);
     }
 
     return EnvoyServerProtoData.Listener.create(
@@ -194,7 +199,7 @@ class XdsListenerResource extends XdsResourceType<LdsUpdate> {
   static FilterChain parseFilterChain(
       io.envoyproxy.envoy.config.listener.v3.FilterChain proto,
       TlsContextManager tlsContextManager, FilterRegistry filterRegistry,
-      Set<FilterChainMatch> uniqueSet, Set<String> certProviderInstances)
+      Set<FilterChainMatch> uniqueSet, Set<String> certProviderInstances, XdsResourceType.Args args)
       throws ResourceInvalidException {
     if (proto.getFiltersCount() != 1) {
       throw new ResourceInvalidException("FilterChain " + proto.getName()
@@ -221,7 +226,7 @@ class XdsListenerResource extends XdsResourceType<LdsUpdate> {
           + filter.getName() + " failed to unpack message", e);
     }
     io.grpc.xds.HttpConnectionManager httpConnectionManager = parseHttpConnectionManager(
-        hcmProto, filterRegistry, false /* isForClient */);
+        hcmProto, filterRegistry, false /* isForClient */, args);
 
     EnvoyServerProtoData.DownstreamTlsContext downstreamTlsContext = null;
     if (proto.hasTransportSocket()) {
@@ -453,7 +458,7 @@ class XdsListenerResource extends XdsResourceType<LdsUpdate> {
   @VisibleForTesting
   static io.grpc.xds.HttpConnectionManager parseHttpConnectionManager(
       HttpConnectionManager proto, FilterRegistry filterRegistry,
-      boolean isForClient) throws ResourceInvalidException {
+      boolean isForClient, XdsResourceType.Args args) throws ResourceInvalidException {
     if (proto.getXffNumTrustedHops() != 0) {
       throw new ResourceInvalidException(
           "HttpConnectionManager with xff_num_trusted_hops unsupported");
@@ -510,7 +515,7 @@ class XdsListenerResource extends XdsResourceType<LdsUpdate> {
     // Parse inlined RouteConfiguration or RDS.
     if (proto.hasRouteConfig()) {
       List<VirtualHost> virtualHosts = extractVirtualHosts(
-          proto.getRouteConfig(), filterRegistry);
+          proto.getRouteConfig(), filterRegistry, args);
       return io.grpc.xds.HttpConnectionManager.forVirtualHosts(
           maxStreamDuration, virtualHosts, filterConfigs);
     }
@@ -600,12 +605,12 @@ class XdsListenerResource extends XdsResourceType<LdsUpdate> {
 
     static LdsUpdate forApiListener(io.grpc.xds.HttpConnectionManager httpConnectionManager) {
       checkNotNull(httpConnectionManager, "httpConnectionManager");
-      return new AutoValue_XdsListenerResource_LdsUpdate(httpConnectionManager, null);
+      return new io.grpc.xds.AutoValue_XdsListenerResource_LdsUpdate(httpConnectionManager, null);
     }
 
     static LdsUpdate forTcpListener(EnvoyServerProtoData.Listener listener) {
       checkNotNull(listener, "listener");
-      return new AutoValue_XdsListenerResource_LdsUpdate(null, listener);
+      return new io.grpc.xds.AutoValue_XdsListenerResource_LdsUpdate(null, listener);
     }
   }
 }

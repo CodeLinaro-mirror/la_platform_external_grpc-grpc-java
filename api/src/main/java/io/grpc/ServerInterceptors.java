@@ -197,7 +197,7 @@ public final class ServerInterceptors {
    * to allow for interceptors to handle messages as multiple different ReqT/RespT types within
    * the chain if the added cost of serialization is not a concern.
    *
-   * @param serviceDef         the sevice definition to add request and response marshallers to.
+   * @param serviceDef         the service definition to add request and response marshallers to.
    * @param requestMarshaller  request marshaller
    * @param responseMarshaller response marshaller
    * @param <ReqT>             the request payload type
@@ -291,23 +291,23 @@ public final class ServerInterceptors {
           final Metadata headers) {
         final ServerCall<OReqT, ORespT> unwrappedCall =
             new PartialForwardingServerCall<OReqT, ORespT>() {
-          @Override
-          protected ServerCall<WReqT, WRespT> delegate() {
-            return call;
-          }
+              @Override
+              protected ServerCall<WReqT, WRespT> delegate() {
+                return call;
+              }
 
-          @Override
-          public void sendMessage(ORespT message) {
-            final InputStream is = originalMethod.streamResponse(message);
-            final WRespT wrappedMessage = wrappedMethod.parseResponse(is);
-            delegate().sendMessage(wrappedMessage);
-          }
+              @Override
+              public void sendMessage(ORespT message) {
+                final InputStream is = originalMethod.streamResponse(message);
+                final WRespT wrappedMessage = wrappedMethod.parseResponse(is);
+                delegate().sendMessage(wrappedMessage);
+              }
 
-          @Override
-          public MethodDescriptor<OReqT, ORespT> getMethodDescriptor() {
-            return originalMethod;
-          }
-        };
+              @Override
+              public MethodDescriptor<OReqT, ORespT> getMethodDescriptor() {
+                return originalMethod;
+              }
+            };
 
         final ServerCall.Listener<OReqT> originalListener = originalHandler
             .startCall(unwrappedCall, headers);

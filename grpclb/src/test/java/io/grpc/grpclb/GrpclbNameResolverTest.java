@@ -32,6 +32,7 @@ import io.grpc.NameResolver;
 import io.grpc.NameResolver.ConfigOrError;
 import io.grpc.NameResolver.ResolutionResult;
 import io.grpc.NameResolver.ServiceConfigParser;
+import io.grpc.NameResolverRegistry;
 import io.grpc.Status;
 import io.grpc.Status.Code;
 import io.grpc.SynchronizationContext;
@@ -95,7 +96,6 @@ public class GrpclbNameResolverTest {
   }
 
   @Captor private ArgumentCaptor<ResolutionResult> resultCaptor;
-  @Captor private ArgumentCaptor<Status> errorCaptor;
   @Mock private ServiceConfigParser serviceConfigParser;
   @Mock private NameResolver.Listener2 mockListener;
 
@@ -122,6 +122,13 @@ public class GrpclbNameResolverTest {
   }
 
   @Test
+  public void provider_isRegistered() {
+    NameResolverRegistry registry = NameResolverRegistry.getDefaultRegistry();
+    assertThat(registry.getProviderForScheme("dns").getClass().getName())
+        .isEqualTo("io.grpc.grpclb.SecretGrpclbNameResolverProvider$Provider");
+  }
+
+  @Test
   public void resolve_emptyResult() {
     resolver.setAddressResolver(new AddressResolver() {
       @Override
@@ -144,9 +151,9 @@ public class GrpclbNameResolverTest {
     resolver.start(mockListener);
     assertThat(fakeClock.runDueTasks()).isEqualTo(1);
 
-    verify(mockListener).onResult(resultCaptor.capture());
+    verify(mockListener).onResult2(resultCaptor.capture());
     ResolutionResult result = resultCaptor.getValue();
-    assertThat(result.getAddresses()).isEmpty();
+    assertThat(result.getAddressesOrError().getValue()).isEmpty();
     assertThat(result.getAttributes()).isEqualTo(Attributes.EMPTY);
     assertThat(result.getServiceConfig()).isNull();
   }
@@ -184,11 +191,11 @@ public class GrpclbNameResolverTest {
 
     resolver.start(mockListener);
     assertThat(fakeClock.runDueTasks()).isEqualTo(1);
-    verify(mockListener).onResult(resultCaptor.capture());
+    verify(mockListener).onResult2(resultCaptor.capture());
     ResolutionResult result = resultCaptor.getValue();
     InetSocketAddress resolvedBackendAddr =
         (InetSocketAddress) Iterables.getOnlyElement(
-            Iterables.getOnlyElement(result.getAddresses()).getAddresses());
+            Iterables.getOnlyElement(result.getAddressesOrError().getValue()).getAddresses());
     assertThat(resolvedBackendAddr.getAddress()).isEqualTo(backendAddr);
     EquivalentAddressGroup resolvedBalancerAddr =
         Iterables.getOnlyElement(result.getAttributes().get(GrpclbConstants.ATTR_LB_ADDRS));
@@ -217,9 +224,9 @@ public class GrpclbNameResolverTest {
 
     resolver.start(mockListener);
     assertThat(fakeClock.runDueTasks()).isEqualTo(1);
-    verify(mockListener).onResult(resultCaptor.capture());
+    verify(mockListener).onResult2(resultCaptor.capture());
     ResolutionResult result = resultCaptor.getValue();
-    assertThat(result.getAddresses())
+    assertThat(result.getAddressesOrError().getValue())
         .containsExactly(
             new EquivalentAddressGroup(new InetSocketAddress(backendAddr, DEFAULT_PORT)));
     assertThat(result.getAttributes()).isEqualTo(Attributes.EMPTY);
@@ -237,8 +244,8 @@ public class GrpclbNameResolverTest {
 
     resolver.start(mockListener);
     assertThat(fakeClock.runDueTasks()).isEqualTo(1);
-    verify(mockListener).onError(errorCaptor.capture());
-    Status errorStatus = errorCaptor.getValue();
+    verify(mockListener).onResult2(resultCaptor.capture());
+    Status errorStatus = resultCaptor.getValue().getAddressesOrError().getStatus();
     assertThat(errorStatus.getCode()).isEqualTo(Code.UNAVAILABLE);
     assertThat(errorStatus.getCause()).hasMessageThat().contains("no addr");
   }
@@ -264,9 +271,9 @@ public class GrpclbNameResolverTest {
 
     resolver.start(mockListener);
     assertThat(fakeClock.runDueTasks()).isEqualTo(1);
-    verify(mockListener).onResult(resultCaptor.capture());
+    verify(mockListener).onResult2(resultCaptor.capture());
     ResolutionResult result = resultCaptor.getValue();
-    assertThat(result.getAddresses()).isEmpty();
+    assertThat(result.getAddressesOrError().getValue()).isEmpty();
     EquivalentAddressGroup resolvedBalancerAddr =
         Iterables.getOnlyElement(result.getAttributes().get(GrpclbConstants.ATTR_LB_ADDRS));
     assertThat(resolvedBalancerAddr.getAttributes().get(GrpclbConstants.ATTR_LB_ADDR_AUTHORITY))
@@ -298,12 +305,12 @@ public class GrpclbNameResolverTest {
 
     resolver.start(mockListener);
     assertThat(fakeClock.runDueTasks()).isEqualTo(1);
-    verify(mockListener).onResult(resultCaptor.capture());
+    verify(mockListener).onResult2(resultCaptor.capture());
     ResolutionResult result = resultCaptor.getValue();
 
     InetSocketAddress resolvedBackendAddr =
         (InetSocketAddress) Iterables.getOnlyElement(
-            Iterables.getOnlyElement(result.getAddresses()).getAddresses());
+            Iterables.getOnlyElement(result.getAddressesOrError().getValue()).getAddresses());
     assertThat(resolvedBackendAddr.getAddress()).isEqualTo(backendAddr);
     assertThat(result.getAttributes().get(GrpclbConstants.ATTR_LB_ADDRS)).isNull();
     verify(mockAddressResolver).resolveAddress(hostName);
@@ -327,8 +334,8 @@ public class GrpclbNameResolverTest {
 
     resolver.start(mockListener);
     assertThat(fakeClock.runDueTasks()).isEqualTo(1);
-    verify(mockListener).onError(errorCaptor.capture());
-    Status errorStatus = errorCaptor.getValue();
+    verify(mockListener).onResult2(resultCaptor.capture());
+    Status errorStatus = resultCaptor.getValue().getAddressesOrError().getStatus();
     assertThat(errorStatus.getCode()).isEqualTo(Code.UNAVAILABLE);
     verify(mockAddressResolver).resolveAddress(hostName);
     verify(mockResourceResolver, never()).resolveTxt("_grpc_config." + hostName);

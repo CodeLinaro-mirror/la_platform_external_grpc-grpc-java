@@ -16,12 +16,11 @@
 
 package io.grpc;
 
-import static com.google.common.base.Charsets.US_ASCII;
-import static com.google.common.base.Charsets.UTF_8;
+import static java.nio.charset.StandardCharsets.US_ASCII;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
@@ -30,6 +29,7 @@ import static org.junit.Assert.fail;
 
 import com.google.common.collect.Lists;
 import com.google.common.io.ByteStreams;
+import com.google.common.testing.EqualsTester;
 import io.grpc.internal.GrpcUtil;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -54,16 +54,16 @@ public class MetadataTest {
 
   private static final Metadata.BinaryMarshaller<Fish> FISH_MARSHALLER =
       new Metadata.BinaryMarshaller<Fish>() {
-    @Override
-    public byte[] toBytes(Fish fish) {
-      return fish.name.getBytes(UTF_8);
-    }
+        @Override
+        public byte[] toBytes(Fish fish) {
+          return fish.name.getBytes(UTF_8);
+        }
 
-    @Override
-    public Fish parseBytes(byte[] serialized) {
-      return new Fish(new String(serialized, UTF_8));
-    }
-  };
+        @Override
+        public Fish parseBytes(byte[] serialized) {
+          return new Fish(new String(serialized, UTF_8));
+        }
+      };
 
   private static class FishStreamMarsaller implements Metadata.BinaryStreamMarshaller<Fish> {
     @Override
@@ -100,16 +100,16 @@ public class MetadataTest {
 
   private static final Metadata.BinaryStreamMarshaller<Fish> IMMUTABLE_FISH_MARSHALLER =
       new Metadata.BinaryStreamMarshaller<Fish>() {
-    @Override
-    public InputStream toStream(Fish fish) {
-      return new FakeFishStream(fish);
-    }
+        @Override
+        public InputStream toStream(Fish fish) {
+          return new FakeFishStream(fish);
+        }
 
-    @Override
-    public Fish parseStream(InputStream stream) {
-      return ((FakeFishStream) stream).fish;
-    }
-  };
+        @Override
+        public Fish parseStream(InputStream stream) {
+          return ((FakeFishStream) stream).fish;
+        }
+      };
 
   private static final String LANCE = "lance";
   private static final byte[] LANCE_BYTES = LANCE.getBytes(US_ASCII);
@@ -313,6 +313,7 @@ public class MetadataTest {
   }
 
   @Test
+  @SuppressWarnings("StringCaseLocaleUsage")  // System locale is exactly what we're testing.
   public void testKeyCaseHandling() {
     Locale originalLocale = Locale.getDefault();
     Locale.setDefault(new Locale("tr", "TR"));
@@ -367,14 +368,12 @@ public class MetadataTest {
   @Test
   public void keyEqualsHashNameWorks() {
     Metadata.Key<?> k1 = Metadata.Key.of("case", Metadata.ASCII_STRING_MARSHALLER);
-
     Metadata.Key<?> k2 = Metadata.Key.of("CASE", Metadata.ASCII_STRING_MARSHALLER);
-    assertEquals(k1, k1);
-    assertNotEquals(k1, null);
-    assertNotEquals(k1, new Object(){});
-    assertEquals(k1, k2);
 
-    assertEquals(k1.hashCode(), k2.hashCode());
+    new EqualsTester()
+        .addEqualityGroup(k1, k2)
+        .addEqualityGroup(new Object(){})
+        .testEquals();
     // Check that the casing is preserved.
     assertEquals("CASE", k2.originalName());
     assertEquals("case", k2.name());

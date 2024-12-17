@@ -61,11 +61,14 @@ import io.grpc.MethodDescriptor;
 import io.grpc.MethodDescriptor.MethodType;
 import io.grpc.NameResolver;
 import io.grpc.NameResolver.ResolutionResult;
+import io.grpc.NameResolverProvider;
 import io.grpc.Status;
+import io.grpc.StatusOr;
 import io.grpc.StringMarshaller;
 import io.grpc.internal.FakeClock.ScheduledTask;
 import io.grpc.internal.ManagedChannelImplBuilder.UnsupportedClientTransportFactoryBuilder;
 import io.grpc.internal.TestUtils.MockClientTransportInfo;
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.URI;
 import java.util.ArrayList;
@@ -154,16 +157,23 @@ public class ManagedChannelImplIdlenessTest {
   @Before
   @SuppressWarnings("deprecation") // For NameResolver.Listener
   public void setUp() {
-    when(mockLoadBalancer.acceptResolvedAddresses(isA(ResolvedAddresses.class))).thenReturn(true);
+    when(mockLoadBalancer.acceptResolvedAddresses(isA(ResolvedAddresses.class))).thenReturn(
+        Status.OK);
     LoadBalancerRegistry.getDefaultRegistry().register(mockLoadBalancerProvider);
     when(mockNameResolver.getServiceAuthority()).thenReturn(AUTHORITY);
     when(mockNameResolverFactory
         .newNameResolver(any(URI.class), any(NameResolver.Args.class)))
         .thenReturn(mockNameResolver);
+    when(mockNameResolverFactory.getDefaultScheme())
+        .thenReturn("mockscheme");
     when(mockTransportFactory.getScheduledExecutorService())
         .thenReturn(timer.getScheduledExecutorService());
+    when(mockTransportFactory.getSupportedSocketAddressTypes())
+        .thenReturn(Collections.singleton(InetSocketAddress.class));
 
-    ManagedChannelImplBuilder builder = new ManagedChannelImplBuilder("fake://target",
+    String target = "mockscheme:///target";
+    URI targetUri = URI.create(target);
+    ManagedChannelImplBuilder builder = new ManagedChannelImplBuilder(target,
         new UnsupportedClientTransportFactoryBuilder(), null);
 
     builder
@@ -172,8 +182,11 @@ public class ManagedChannelImplIdlenessTest {
         .idleTimeout(IDLE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .userAgent(USER_AGENT);
     builder.executorPool = executorPool;
+    NameResolverProvider nameResolverProvider =
+        builder.nameResolverRegistry.getProviderForScheme(targetUri.getScheme());
     channel = new ManagedChannelImpl(
-        builder, mockTransportFactory, new FakeBackoffPolicyProvider(),
+        builder, mockTransportFactory, targetUri, nameResolverProvider,
+        new FakeBackoffPolicyProvider(),
         oobExecutorPool, timer.getStopwatchSupplier(),
         Collections.<ClientInterceptor>emptyList(),
         TimeProvider.SYSTEM_TIME_PROVIDER);
@@ -603,7 +616,7 @@ public class ManagedChannelImplIdlenessTest {
     // the NameResolver.
     ResolutionResult resolutionResult =
         ResolutionResult.newBuilder()
-            .setAddresses(servers)
+            .setAddressesOrError(StatusOr.fromValue(servers))
             .setAttributes(Attributes.EMPTY)
             .build();
     nameResolverListenerCaptor.getValue().onResult(resolutionResult);

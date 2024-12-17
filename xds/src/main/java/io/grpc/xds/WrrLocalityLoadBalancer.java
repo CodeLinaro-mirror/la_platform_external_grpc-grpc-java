@@ -27,12 +27,11 @@ import io.grpc.InternalLogId;
 import io.grpc.LoadBalancer;
 import io.grpc.LoadBalancerRegistry;
 import io.grpc.Status;
-import io.grpc.internal.ServiceConfigUtil.PolicySelection;
 import io.grpc.util.GracefulSwitchLoadBalancer;
 import io.grpc.xds.WeightedTargetLoadBalancerProvider.WeightedPolicySelection;
 import io.grpc.xds.WeightedTargetLoadBalancerProvider.WeightedTargetConfig;
-import io.grpc.xds.XdsLogger.XdsLogLevel;
-import io.grpc.xds.XdsSubchannelPickers.ErrorPicker;
+import io.grpc.xds.client.XdsLogger;
+import io.grpc.xds.client.XdsLogger.XdsLogLevel;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -63,7 +62,7 @@ final class WrrLocalityLoadBalancer extends LoadBalancer {
   }
 
   @Override
-  public boolean acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
+  public Status acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
     logger.log(XdsLogLevel.DEBUG, "Received resolution result: {0}", resolvedAddresses);
 
     // The configuration with the child policy is combined with the locality weights
@@ -72,22 +71,25 @@ final class WrrLocalityLoadBalancer extends LoadBalancer {
         = (WrrLocalityConfig) resolvedAddresses.getLoadBalancingPolicyConfig();
 
     // A map of locality weights is built up from the locality weight attributes in each address.
-    Map<Locality, Integer> localityWeights = new HashMap<>();
+    Map<String, Integer> localityWeights = new HashMap<>();
     for (EquivalentAddressGroup eag : resolvedAddresses.getAddresses()) {
       Attributes eagAttrs = eag.getAttributes();
-      Locality locality = eagAttrs.get(InternalXdsAttributes.ATTR_LOCALITY);
+      String locality = eagAttrs.get(InternalXdsAttributes.ATTR_LOCALITY_NAME);
       Integer localityWeight = eagAttrs.get(InternalXdsAttributes.ATTR_LOCALITY_WEIGHT);
 
       if (locality == null) {
-        helper.updateBalancingState(TRANSIENT_FAILURE, new ErrorPicker(
-            Status.UNAVAILABLE.withDescription("wrr_locality error: no locality provided")));
-        return false;
+        Status unavailableStatus = Status.UNAVAILABLE.withDescription(
+            "wrr_locality error: no locality provided");
+        helper.updateBalancingState(TRANSIENT_FAILURE,
+            new FixedResultPicker(PickResult.withError(unavailableStatus)));
+        return unavailableStatus;
       }
       if (localityWeight == null) {
-        helper.updateBalancingState(TRANSIENT_FAILURE, new ErrorPicker(
-            Status.UNAVAILABLE.withDescription(
-                "wrr_locality error: no weight provided for locality " + locality)));
-        return false;
+        Status unavailableStatus = Status.UNAVAILABLE.withDescription(
+                "wrr_locality error: no weight provided for locality " + locality);
+        helper.updateBalancingState(TRANSIENT_FAILURE,
+            new FixedResultPicker(PickResult.withError(unavailableStatus)));
+        return unavailableStatus;
       }
 
       if (!localityWeights.containsKey(locality)) {
@@ -102,19 +104,21 @@ final class WrrLocalityLoadBalancer extends LoadBalancer {
     // Weighted target LB expects a WeightedPolicySelection for each locality as it will create a
     // child LB for each.
     Map<String, WeightedPolicySelection> weightedPolicySelections = new HashMap<>();
-    for (Locality locality : localityWeights.keySet()) {
-      weightedPolicySelections.put(locality.toString(),
+    for (String locality : localityWeights.keySet()) {
+      weightedPolicySelections.put(locality,
           new WeightedPolicySelection(localityWeights.get(locality),
-              wrrLocalityConfig.childPolicy));
+              wrrLocalityConfig.childConfig));
     }
 
-    switchLb.switchTo(lbRegistry.getProvider(WEIGHTED_TARGET_POLICY_NAME));
+    Object switchConfig = GracefulSwitchLoadBalancer.createLoadBalancingPolicyConfig(
+        lbRegistry.getProvider(WEIGHTED_TARGET_POLICY_NAME),
+        new WeightedTargetConfig(weightedPolicySelections));
     switchLb.handleResolvedAddresses(
         resolvedAddresses.toBuilder()
-            .setLoadBalancingPolicyConfig(new WeightedTargetConfig(weightedPolicySelections))
+            .setLoadBalancingPolicyConfig(switchConfig)
             .build());
 
-    return true;
+    return Status.OK;
   }
 
   @Override
@@ -133,10 +137,10 @@ final class WrrLocalityLoadBalancer extends LoadBalancer {
    */
   static final class WrrLocalityConfig {
 
-    final PolicySelection childPolicy;
+    final Object childConfig;
 
-    WrrLocalityConfig(PolicySelection childPolicy) {
-      this.childPolicy = childPolicy;
+    WrrLocalityConfig(Object childConfig) {
+      this.childConfig = childConfig;
     }
 
     @Override
@@ -148,17 +152,17 @@ final class WrrLocalityLoadBalancer extends LoadBalancer {
         return false;
       }
       WrrLocalityConfig that = (WrrLocalityConfig) o;
-      return Objects.equals(childPolicy, that.childPolicy);
+      return Objects.equals(childConfig, that.childConfig);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hashCode(childPolicy);
+      return Objects.hashCode(childConfig);
     }
 
     @Override
     public String toString() {
-      return MoreObjects.toStringHelper(this).add("childPolicy", childPolicy).toString();
+      return MoreObjects.toStringHelper(this).add("childConfig", childConfig).toString();
     }
   }
 }

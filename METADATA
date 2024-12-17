@@ -1,16 +1,20 @@
+# This project was upgraded with external_updater.
+# Usage: tools/external_updater/updater.sh update external/grpc-grpc-java
+# For more info, check https://cs.android.com/android/platform/superproject/main/+/main:tools/external_updater/README.md
+
 name: "grpc-grpc-java"
 description: "An RPC library and framework"
-
 third_party {
-  url {
-    type: HOMEPAGE
-    value: "https://grpc.io/"
-  }
-  url {
-    type: GIT
-    value: "https://github.com/grpc/grpc-java"
-  }
-  version: "v1.56"
-  last_upgrade_date: { year: 2023 month: 06 day: 20 }
   license_type: NOTICE
+  last_upgrade_date {
+    year: 2024
+    month: 12
+    day: 12
+  }
+  homepage: "https://grpc.io/"
+  identifier {
+    type: "Git"
+    value: "https://github.com/grpc/grpc-java"
+    version: "v1.69.0"
+  }
 }

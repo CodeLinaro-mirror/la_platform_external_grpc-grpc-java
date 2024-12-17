@@ -18,11 +18,14 @@ package io.grpc.binder;
 
 import static android.content.Intent.URI_ANDROID_APP_SCHEME;
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertThrows;
 
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Parcel;
+import android.os.UserHandle;
 import androidx.test.core.app.ApplicationProvider;
 import com.google.common.testing.EqualsTester;
 import java.net.URISyntaxException;
@@ -50,6 +53,26 @@ public final class AndroidComponentAddressTest {
   }
 
   @Test
+  public void testTargetPackageNullComponentName() {
+    AndroidComponentAddress addr =
+        AndroidComponentAddress.forBindIntent(
+            new Intent().setPackage("com.foo").setAction(ApiConstants.ACTION_BIND));
+    assertThat(addr.getPackage()).isEqualTo("com.foo");
+    assertThat(addr.getComponent()).isNull();
+  }
+
+  @Test
+  public void testTargetPackageNonNullComponentName() {
+    AndroidComponentAddress addr =
+        AndroidComponentAddress.forBindIntent(
+            new Intent()
+                .setComponent(new ComponentName("com.foo", "com.foo.BarService"))
+                .setPackage("com.foo")
+                .setAction(ApiConstants.ACTION_BIND));
+    assertThat(addr.getPackage()).isEqualTo("com.foo");
+  }
+
+  @Test
   public void testAsBindIntent() {
     Intent bindIntent =
         new Intent()
@@ -61,6 +84,32 @@ public final class AndroidComponentAddressTest {
             .addCategory("another-category");
     AndroidComponentAddress addr = AndroidComponentAddress.forBindIntent(bindIntent);
     assertThat(addr.asBindIntent().filterEquals(bindIntent)).isTrue();
+  }
+
+  @Test
+  public void testPostCreateIntentMutation() {
+    Intent bindIntent = new Intent().setAction("foo-action").setComponent(hostComponent);
+    AndroidComponentAddress addr = AndroidComponentAddress.forBindIntent(bindIntent);
+    bindIntent.setAction("bar-action");
+    assertThat(addr.asBindIntent().getAction()).isEqualTo("foo-action");
+  }
+
+  @Test
+  public void testPostBuildIntentMutation() {
+    Intent bindIntent = new Intent().setAction("foo-action").setComponent(hostComponent);
+    AndroidComponentAddress addr =
+        AndroidComponentAddress.newBuilder().setBindIntent(bindIntent).build();
+    bindIntent.setAction("bar-action");
+    assertThat(addr.asBindIntent().getAction()).isEqualTo("foo-action");
+  }
+
+  @Test
+  public void testBuilderMissingRequired() {
+    IllegalStateException ise =
+        assertThrows(
+            IllegalStateException.class,
+            () -> AndroidComponentAddress.newBuilder().setTargetUser(newUserHandle(123)).build());
+    assertThat(ise.getMessage()).contains("bindIntent");
   }
 
   @Test
@@ -97,19 +146,52 @@ public final class AndroidComponentAddressTest {
             AndroidComponentAddress.forContext(appContext),
             AndroidComponentAddress.forLocalComponent(appContext, appContext.getClass()),
             AndroidComponentAddress.forRemoteComponent(
-                appContext.getPackageName(), appContext.getClass().getName()))
+                appContext.getPackageName(), appContext.getClass().getName()),
+            AndroidComponentAddress.newBuilder()
+                .setBindIntentFromComponent(hostComponent)
+                .setTargetUser(null)
+                .build())
         .addEqualityGroup(
             AndroidComponentAddress.forRemoteComponent("appy.mcappface", ".McActivity"))
         .addEqualityGroup(AndroidComponentAddress.forLocalComponent(appContext, getClass()))
         .addEqualityGroup(
             AndroidComponentAddress.forBindIntent(
-                new Intent().setAction("custom-action").setComponent(hostComponent)))
+                new Intent().setAction("custom-action").setComponent(hostComponent)),
+            AndroidComponentAddress.newBuilder()
+                .setBindIntent(new Intent().setAction("custom-action").setComponent(hostComponent))
+                .setTargetUser(null)
+                .build())
         .addEqualityGroup(
             AndroidComponentAddress.forBindIntent(
                 new Intent()
                     .setAction("custom-action")
                     .setType("some-type")
                     .setComponent(hostComponent)))
+        .testEquals();
+  }
+
+  @Test
+  public void testUnequalTargetUsers() {
+    new EqualsTester()
+        .addEqualityGroup(
+            AndroidComponentAddress.newBuilder()
+                .setBindIntentFromComponent(hostComponent)
+                .setTargetUser(newUserHandle(10))
+                .build(),
+            AndroidComponentAddress.newBuilder()
+                .setBindIntentFromComponent(hostComponent)
+                .setTargetUser(newUserHandle(10))
+                .build())
+        .addEqualityGroup(
+            AndroidComponentAddress.newBuilder()
+                .setBindIntentFromComponent(hostComponent)
+                .setTargetUser(newUserHandle(11))
+                .build())
+        .addEqualityGroup(
+            AndroidComponentAddress.newBuilder()
+                .setBindIntentFromComponent(hostComponent)
+                .setTargetUser(null)
+                .build())
         .testEquals();
   }
 
@@ -142,5 +224,16 @@ public final class AndroidComponentAddressTest {
                     .setPackage("pkg")
                     .setComponent(new ComponentName("pkg", "cls"))))
         .testEquals();
+  }
+
+  private static UserHandle newUserHandle(int userId) {
+    Parcel parcel = Parcel.obtain();
+    try {
+      parcel.writeInt(userId);
+      parcel.setDataPosition(0);
+      return new UserHandle(parcel);
+    } finally {
+      parcel.recycle();
+    }
   }
 }

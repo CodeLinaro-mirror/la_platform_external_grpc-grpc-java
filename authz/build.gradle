@@ -2,8 +2,8 @@ plugins {
     id "java-library"
     id "maven-publish"
 
-    id "com.github.johnrengelman.shadow"
     id "com.google.protobuf"
+    id "com.gradleup.shadow"
     id "ru.vyarus.animalsniffer"
 }
 
@@ -20,9 +20,7 @@ dependencies {
     testImplementation project(':grpc-testing'),
             project(':grpc-testing-proto'),
             testFixtures(project(':grpc-core'))
-    testImplementation (libraries.guava.testlib) {
-        exclude group: 'junit', module: 'junit'
-    }
+    testImplementation libraries.guava.testlib
 
     def xdsDependency = implementation project(':grpc-xds')
     shadow configurations.implementation.getDependencies().minus([xdsDependency])

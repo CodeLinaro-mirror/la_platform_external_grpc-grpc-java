@@ -158,7 +158,7 @@ public final class MethodDescriptor<ReqT, RespT> {
   }
 
   /**
-   * A marshaller that supports retrieving it's type parameter {@code T} at runtime.
+   * A marshaller that supports retrieving its type parameter {@code T} at runtime.
    *
    * @since 1.1.0
    */
@@ -324,7 +324,6 @@ public final class MethodDescriptor<ReqT, RespT> {
    *
    * @since 1.1.0
    */
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/2592")
   public Marshaller<ReqT> getRequestMarshaller() {
     return requestMarshaller;
   }
@@ -334,7 +333,6 @@ public final class MethodDescriptor<ReqT, RespT> {
    *
    * @since 1.1.0
    */
-  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/2592")
   public Marshaller<RespT> getResponseMarshaller() {
     return responseMarshaller;
   }

@@ -47,6 +47,7 @@ import io.grpc.ServerCallHandler;
 import io.grpc.ServerInterceptor;
 import io.grpc.Status;
 import io.grpc.StatusException;
+import io.grpc.SynchronizationContext;
 import io.grpc.internal.FakeClock;
 import io.grpc.testing.TestMethodDescriptors;
 import io.grpc.xds.EnvoyServerProtoData.FilterChain;
@@ -57,13 +58,16 @@ import io.grpc.xds.FilterChainMatchingProtocolNegotiators.FilterChainMatchingHan
 import io.grpc.xds.VirtualHost.Route;
 import io.grpc.xds.VirtualHost.Route.RouteMatch;
 import io.grpc.xds.VirtualHost.Route.RouteMatch.PathMatcher;
-import io.grpc.xds.XdsClient.ResourceWatcher;
 import io.grpc.xds.XdsRouteConfigureResource.RdsUpdate;
 import io.grpc.xds.XdsServerBuilder.XdsServingStatusListener;
 import io.grpc.xds.XdsServerTestHelper.FakeXdsClient;
 import io.grpc.xds.XdsServerTestHelper.FakeXdsClientPoolFactory;
 import io.grpc.xds.XdsServerWrapper.ConfigApplyingInterceptor;
 import io.grpc.xds.XdsServerWrapper.ServerRoutingConfig;
+import io.grpc.xds.client.Bootstrapper;
+import io.grpc.xds.client.EnvoyProtoData;
+import io.grpc.xds.client.XdsClient;
+import io.grpc.xds.client.XdsClient.ResourceWatcher;
 import io.grpc.xds.internal.Matchers.HeaderMatcher;
 import io.grpc.xds.internal.security.CommonTlsContextTestsUtil;
 import io.grpc.xds.internal.security.SslContextProviderSupplier;
@@ -152,7 +156,8 @@ public class XdsServerWrapperTest {
     verify(xdsClient, timeout(5000)).watchXdsResource(
         eq(listenerResource),
         eq("grpc/server?udpa.resource.listening_address=[::FFFF:129.144.52.38]:80"),
-        any(ResourceWatcher.class));
+        any(ResourceWatcher.class),
+        any(SynchronizationContext.class));
   }
 
   @Test
@@ -224,7 +229,8 @@ public class XdsServerWrapperTest {
         eq(listenerResource),
         eq("xdstp://xds.authority.com/envoy.config.listener.v3.Listener/grpc/server/"
             + "%5B::FFFF:129.144.52.38%5D:80"),
-        any(ResourceWatcher.class));
+        any(ResourceWatcher.class),
+        any(SynchronizationContext.class));
   }
 
   @Test
@@ -1029,7 +1035,8 @@ public class XdsServerWrapperTest {
             "/FooService/barMethod",
             "foo.google.com",
             Route.RouteAction.forCluster(
-                "cluster", Collections.<Route.RouteAction.HashPolicy>emptyList(), null, null));
+                "cluster", Collections.<Route.RouteAction.HashPolicy>emptyList(), null, null,
+                false));
     ServerCall<Void, Void> serverCall = mock(ServerCall.class);
     when(serverCall.getAttributes()).thenReturn(
         Attributes.newBuilder()

@@ -22,6 +22,7 @@ import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 import android.content.Context;
+import android.content.Intent;
 import android.os.Parcel;
 import android.os.Parcelable;
 import androidx.test.core.app.ApplicationProvider;
@@ -32,7 +33,6 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
-import io.grpc.ClientCall;
 import io.grpc.ClientInterceptors;
 import io.grpc.ConnectivityState;
 import io.grpc.ForwardingServerCall.SimpleForwardingServerCall;
@@ -78,8 +78,8 @@ public final class BinderChannelSmokeTest {
   private static final int SLIGHTLY_MORE_THAN_ONE_BLOCK = 16 * 1024 + 100;
   private static final String MSG = "Some text which will be repeated many many times";
   private static final String SERVER_TARGET_URI = "fake://server";
-  private static final Metadata.Key<PoisonParcelable> POISON_KEY = ParcelableUtils.metadataKey(
-      "poison-bin", PoisonParcelable.CREATOR);
+  private static final Metadata.Key<PoisonParcelable> POISON_KEY =
+      ParcelableUtils.metadataKey("poison-bin", PoisonParcelable.CREATOR);
 
   final MethodDescriptor<String, String> method =
       MethodDescriptor.newBuilder(StringMarshaller.INSTANCE, StringMarshaller.INSTANCE)
@@ -140,22 +140,27 @@ public final class BinderChannelSmokeTest {
     AndroidComponentAddress serverAddress = HostServices.allocateService(appContext);
     fakeNameResolverProvider = new FakeNameResolverProvider(SERVER_TARGET_URI, serverAddress);
     NameResolverRegistry.getDefaultRegistry().register(fakeNameResolverProvider);
-    HostServices.configureService(serverAddress,
+    HostServices.configureService(
+        serverAddress,
         HostServices.serviceParamsBuilder()
-            .setServerFactory((service, receiver) ->
-                BinderServerBuilder.forAddress(serverAddress, receiver)
-                    .inboundParcelablePolicy(InboundParcelablePolicy.newBuilder()
-                        .setAcceptParcelableMetadataValues(true)
+            .setServerFactory(
+                (service, receiver) ->
+                    BinderServerBuilder.forAddress(serverAddress, receiver)
+                        .inboundParcelablePolicy(
+                            InboundParcelablePolicy.newBuilder()
+                                .setAcceptParcelableMetadataValues(true)
+                                .build())
+                        .addService(serviceDef)
                         .build())
-                    .addService(serviceDef)
-                    .build())
             .build());
 
-    channel = BinderChannelBuilder.forAddress(serverAddress, appContext)
-        .inboundParcelablePolicy(InboundParcelablePolicy.newBuilder()
-            .setAcceptParcelableMetadataValues(true)
-            .build())
-        .build();
+    channel =
+        BinderChannelBuilder.forAddress(serverAddress, appContext)
+            .inboundParcelablePolicy(
+                InboundParcelablePolicy.newBuilder()
+                    .setAcceptParcelableMetadataValues(true)
+                    .build())
+            .build();
   }
 
   @After
@@ -235,14 +240,26 @@ public final class BinderChannelSmokeTest {
   }
 
   @Test
+  public void testConnectViaIntentFilter() throws Exception {
+    // Compare with the <intent-filter> mapping in AndroidManifest.xml.
+    channel =
+        BinderChannelBuilder.forAddress(
+                AndroidComponentAddress.forBindIntent(
+                    new Intent().setAction("action1").setPackage(appContext.getPackageName())),
+                appContext)
+            .build();
+    assertThat(doCall("Hello").get()).isEqualTo("Hello");
+  }
+
+  @Test
   public void testUncaughtServerException() throws Exception {
     // Use a poison parcelable to cause an unexpected Exception in the server's onTransact().
     PoisonParcelable bad = new PoisonParcelable();
     Metadata extraHeadersToSend = new Metadata();
     extraHeadersToSend.put(POISON_KEY, bad);
     Channel interceptedChannel =
-        ClientInterceptors.intercept(channel,
-                MetadataUtils.newAttachHeadersInterceptor(extraHeadersToSend));
+        ClientInterceptors.intercept(
+            channel, MetadataUtils.newAttachHeadersInterceptor(extraHeadersToSend));
     CallOptions callOptions = CallOptions.DEFAULT.withDeadlineAfter(5, SECONDS);
     try {
       ClientCalls.blockingUnaryCall(interceptedChannel, method, callOptions, "hello");
@@ -349,33 +366,36 @@ public final class BinderChannelSmokeTest {
 
   class AddParcelableServerInterceptor implements ServerInterceptor {
     @Override
-    public <ReqT, RespT> Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call,
-        Metadata headers, ServerCallHandler<ReqT, RespT> next) {
-      return next.startCall(new SimpleForwardingServerCall<ReqT, RespT>(call) {
-        @Override
-        public void sendHeaders(Metadata headers) {
-          if (parcelableForResponseHeaders != null) {
-            headers.put(POISON_KEY, parcelableForResponseHeaders);
-          }
-          super.sendHeaders(headers);
-        }
-      }, headers);
+    public <ReqT, RespT> Listener<ReqT> interceptCall(
+        ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
+      return next.startCall(
+          new SimpleForwardingServerCall<ReqT, RespT>(call) {
+            @Override
+            public void sendHeaders(Metadata headers) {
+              if (parcelableForResponseHeaders != null) {
+                headers.put(POISON_KEY, parcelableForResponseHeaders);
+              }
+              super.sendHeaders(headers);
+            }
+          },
+          headers);
     }
   }
 
   static class PoisonParcelable implements Parcelable {
 
-    public static final Creator<PoisonParcelable> CREATOR = new Parcelable.Creator<PoisonParcelable>() {
-      @Override
-      public PoisonParcelable createFromParcel(Parcel parcel) {
-        throw new RuntimeException("ouch");
-      }
+    public static final Creator<PoisonParcelable> CREATOR =
+        new Parcelable.Creator<PoisonParcelable>() {
+          @Override
+          public PoisonParcelable createFromParcel(Parcel parcel) {
+            throw new RuntimeException("ouch");
+          }
 
-      @Override
-      public PoisonParcelable[] newArray(int n) {
-        return new PoisonParcelable[n];
-      }
-    };
+          @Override
+          public PoisonParcelable[] newArray(int n) {
+            return new PoisonParcelable[n];
+          }
+        };
 
     @Override
     public int describeContents() {
@@ -383,7 +403,6 @@ public final class BinderChannelSmokeTest {
     }
 
     @Override
-    public void writeToParcel(Parcel parcel, int flags) {
-    }
+    public void writeToParcel(Parcel parcel, int flags) {}
   }
 }
