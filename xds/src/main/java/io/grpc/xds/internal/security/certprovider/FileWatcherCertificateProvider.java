@@ -16,12 +16,10 @@
 
 package io.grpc.xds.internal.security.certprovider;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.annotations.VisibleForTesting;
 import io.grpc.Status;
-import io.grpc.internal.SpiffeUtil;
 import io.grpc.internal.TimeProvider;
 import io.grpc.xds.internal.security.trust.CertificateUtils;
 import java.io.ByteArrayInputStream;
@@ -32,7 +30,6 @@ import java.nio.file.attribute.FileTime;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -50,13 +47,11 @@ final class FileWatcherCertificateProvider extends CertificateProvider implement
   private final Path certFile;
   private final Path keyFile;
   private final Path trustFile;
-  private final Path spiffeTrustMapFile;
   private final long refreshIntervalInSeconds;
   @VisibleForTesting ScheduledFuture<?> scheduledFuture;
   private FileTime lastModifiedTimeCert;
   private FileTime lastModifiedTimeKey;
   private FileTime lastModifiedTimeRoot;
-  private FileTime lastModifiedTimespiffeTrustMap;
   private boolean shutdown;
 
   FileWatcherCertificateProvider(
@@ -65,7 +60,6 @@ final class FileWatcherCertificateProvider extends CertificateProvider implement
       String certFile,
       String keyFile,
       String trustFile,
-      String spiffeTrustMapFile,
       long refreshIntervalInSeconds,
       ScheduledExecutorService scheduledExecutorService,
       TimeProvider timeProvider) {
@@ -75,15 +69,7 @@ final class FileWatcherCertificateProvider extends CertificateProvider implement
     this.timeProvider = checkNotNull(timeProvider, "timeProvider");
     this.certFile = Paths.get(checkNotNull(certFile, "certFile"));
     this.keyFile = Paths.get(checkNotNull(keyFile, "keyFile"));
-    checkArgument((trustFile != null || spiffeTrustMapFile != null),
-        "either trustFile or spiffeTrustMapFile must be present");
-    if (spiffeTrustMapFile != null) {
-      this.spiffeTrustMapFile = Paths.get(spiffeTrustMapFile);
-      this.trustFile = null;
-    } else {
-      this.spiffeTrustMapFile = null;
-      this.trustFile = Paths.get(trustFile);
-    }
+    this.trustFile = Paths.get(checkNotNull(trustFile, "trustFile"));
     this.refreshIntervalInSeconds = refreshIntervalInSeconds;
   }
 
@@ -121,48 +107,39 @@ final class FileWatcherCertificateProvider extends CertificateProvider implement
           byte[] keyFileContents = Files.readAllBytes(keyFile);
           FileTime currentCertTime2 = Files.getLastModifiedTime(certFile);
           FileTime currentKeyTime2 = Files.getLastModifiedTime(keyFile);
-          if (currentCertTime2.equals(currentCertTime) && currentKeyTime2.equals(currentKeyTime)) {
-            try (ByteArrayInputStream certStream = new ByteArrayInputStream(certFileContents);
-                ByteArrayInputStream keyStream = new ByteArrayInputStream(keyFileContents)) {
-              PrivateKey privateKey = CertificateUtils.getPrivateKey(keyStream);
-              X509Certificate[] certs = CertificateUtils.toX509Certificates(certStream);
-              getWatcher().updateCertificate(privateKey, Arrays.asList(certs));
-            }
-            lastModifiedTimeCert = currentCertTime;
-            lastModifiedTimeKey = currentKeyTime;
+          if (!currentCertTime2.equals(currentCertTime)) {
+            return;
           }
+          if (!currentKeyTime2.equals(currentKeyTime)) {
+            return;
+          }
+          try (ByteArrayInputStream certStream = new ByteArrayInputStream(certFileContents);
+              ByteArrayInputStream keyStream = new ByteArrayInputStream(keyFileContents)) {
+            PrivateKey privateKey = CertificateUtils.getPrivateKey(keyStream);
+            X509Certificate[] certs = CertificateUtils.toX509Certificates(certStream);
+            getWatcher().updateCertificate(privateKey, Arrays.asList(certs));
+          }
+          lastModifiedTimeCert = currentCertTime;
+          lastModifiedTimeKey = currentKeyTime;
         }
       } catch (Throwable t) {
         generateErrorIfCurrentCertExpired(t);
       }
       try {
-        if (spiffeTrustMapFile != null) {
-          FileTime currentSpiffeTime = Files.getLastModifiedTime(spiffeTrustMapFile);
-          if (!currentSpiffeTime.equals(lastModifiedTimespiffeTrustMap)) {
-            SpiffeUtil.SpiffeBundle trustBundle = SpiffeUtil
-                .loadTrustBundleFromFile(spiffeTrustMapFile.toString());
-            getWatcher().updateSpiffeTrustMap(new HashMap<>(trustBundle.getBundleMap()));
-            lastModifiedTimespiffeTrustMap = currentSpiffeTime;
-          }
+        FileTime currentRootTime = Files.getLastModifiedTime(trustFile);
+        if (currentRootTime.equals(lastModifiedTimeRoot)) {
+          return;
         }
-      } catch (Throwable t) {
-        getWatcher().onError(Status.fromThrowable(t));
-      }
-      try {
-        if (trustFile != null) {
-          FileTime currentRootTime = Files.getLastModifiedTime(trustFile);
-          if (!currentRootTime.equals(lastModifiedTimeRoot)) {
-            byte[] rootFileContents = Files.readAllBytes(trustFile);
-            FileTime currentRootTime2 = Files.getLastModifiedTime(trustFile);
-            if (currentRootTime2.equals(currentRootTime)) {
-              try (ByteArrayInputStream rootStream = new ByteArrayInputStream(rootFileContents)) {
-                X509Certificate[] caCerts = CertificateUtils.toX509Certificates(rootStream);
-                getWatcher().updateTrustedRoots(Arrays.asList(caCerts));
-              }
-              lastModifiedTimeRoot = currentRootTime;
-            }
-          }
+        byte[] rootFileContents = Files.readAllBytes(trustFile);
+        FileTime currentRootTime2 = Files.getLastModifiedTime(trustFile);
+        if (!currentRootTime2.equals(currentRootTime)) {
+          return;
         }
+        try (ByteArrayInputStream rootStream = new ByteArrayInputStream(rootFileContents)) {
+          X509Certificate[] caCerts = CertificateUtils.toX509Certificates(rootStream);
+          getWatcher().updateTrustedRoots(Arrays.asList(caCerts));
+        }
+        lastModifiedTimeRoot = currentRootTime;
       } catch (Throwable t) {
         getWatcher().onError(Status.fromThrowable(t));
       }
@@ -218,7 +195,6 @@ final class FileWatcherCertificateProvider extends CertificateProvider implement
               String certFile,
               String keyFile,
               String trustFile,
-              String spiffeTrustMapFile,
               long refreshIntervalInSeconds,
               ScheduledExecutorService scheduledExecutorService,
               TimeProvider timeProvider) {
@@ -228,7 +204,6 @@ final class FileWatcherCertificateProvider extends CertificateProvider implement
                 certFile,
                 keyFile,
                 trustFile,
-                spiffeTrustMapFile,
                 refreshIntervalInSeconds,
                 scheduledExecutorService,
                 timeProvider);
@@ -245,7 +220,6 @@ final class FileWatcherCertificateProvider extends CertificateProvider implement
         String certFile,
         String keyFile,
         String trustFile,
-        String spiffeTrustMapFile,
         long refreshIntervalInSeconds,
         ScheduledExecutorService scheduledExecutorService,
         TimeProvider timeProvider);

@@ -14,20 +14,21 @@ available. Otherwise, you must follow [COMPILING](../../COMPILING.md).
    See [the examples README](../README.md)
 
 2. Build the debuggable server and client. From the
-   `grpc-java/examples/example-debug` directory run:
+   `grpc-java/examples/examples-debug` directory run:
 
 ```bash
 $ ../gradlew installDist
 ```
 
-This creates the script
-`build/install/example-debug/bin/hostname-debuggable-server` that runs the
-example.
+This creates the
+scripts `build/install/debug/bin/hostname-debuggable-server/bin/hostname-debuggable-server`
+that
+runs the example.
 
 To run the debug example, run:
 
 ```bash
-$ ./build/install/example-debug/bin/hostname-debuggable-server
+$ ./build/install/debug/bin/hostname-debuggable-server/bin/hostname-debuggable-server
 ```
 
 And in a different terminal window run the client.
@@ -45,7 +46,7 @@ $ ../build/install/examples/bin/hello-world-client
 debug enabled client
 
 ```bash
-$ ./build/install/example-debug/bin/hello-world-debuggable-client
+$ ./build/install/examples-debug/bin/hello-world-debuggable-client
 ```
 
 ### Maven
@@ -58,7 +59,7 @@ If you prefer to use Maven:
 
 ```bash
 $ mvn verify
-$ # Run the server (from the example-debug directory)
+$ # Run the server (from the examples-debug directory)
 $ mvn exec:java -Dexec.mainClass=io.grpc.examples.debug.HostnameServer
 $ # In another terminal run the client (from the examples directory)
 $ cd ..

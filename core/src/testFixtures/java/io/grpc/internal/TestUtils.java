@@ -21,11 +21,9 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import io.grpc.Attributes;
 import io.grpc.CallOptions;
 import io.grpc.ChannelLogger;
 import io.grpc.ClientStreamTracer;
-import io.grpc.EquivalentAddressGroup;
 import io.grpc.InternalLogId;
 import io.grpc.LoadBalancer.PickResult;
 import io.grpc.LoadBalancer.PickSubchannelArgs;
@@ -143,14 +141,6 @@ public final class TestUtils {
             any(ChannelLogger.class));
 
     return captor;
-  }
-
-  @SuppressWarnings("ReferenceEquality")
-  public static EquivalentAddressGroup stripAttrs(EquivalentAddressGroup eag) {
-    if (eag.getAttributes() == Attributes.EMPTY) {
-      return eag;
-    }
-    return new EquivalentAddressGroup(eag.getAddresses());
   }
 
   private TestUtils() {

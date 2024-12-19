@@ -39,7 +39,6 @@ import io.grpc.ForwardingClientCallListener.SimpleForwardingClientCallListener;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
-import io.grpc.NoopClientCall;
 import io.grpc.Server;
 import io.grpc.ServerServiceDefinition;
 import io.grpc.ServiceDescriptor;
@@ -47,6 +46,7 @@ import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
+import io.grpc.internal.NoopClientCall;
 import io.grpc.stub.ClientCalls.StubType;
 import io.grpc.stub.ServerCalls.NoopStreamObserver;
 import io.grpc.stub.ServerCalls.ServerStreamingMethod;
@@ -399,7 +399,7 @@ public class ClientCallsTest {
       future.get();
       fail("Should fail");
     } catch (CancellationException e) {
-      // Expected
+      // Exepcted
     }
   }
 

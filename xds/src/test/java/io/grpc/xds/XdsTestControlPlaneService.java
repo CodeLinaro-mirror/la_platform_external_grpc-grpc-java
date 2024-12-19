@@ -122,8 +122,8 @@ final class XdsTestControlPlaneService extends
   @Override
   public StreamObserver<DiscoveryRequest> streamAggregatedResources(
       final StreamObserver<DiscoveryResponse> responseObserver) {
-
-    final class AdsStreamObserver implements StreamObserver<DiscoveryRequest> {
+    final StreamObserver<DiscoveryRequest> requestObserver =
+        new StreamObserver<DiscoveryRequest>() {
       @Override
       public void onNext(final DiscoveryRequest value) {
         syncContext.execute(new Runnable() {
@@ -135,15 +135,12 @@ final class XdsTestControlPlaneService extends
                   new Object[]{value.getResourceNamesList(), value.getErrorDetail()});
               return;
             }
-
             String resourceType = value.getTypeUrl();
-            if (!value.getResponseNonce().isEmpty() && xdsNonces.containsKey(resourceType)
-                && !String.valueOf(xdsNonces.get(resourceType).get(responseObserver))
-                .equals(value.getResponseNonce())) {
+            if (!value.getResponseNonce().isEmpty()
+                && !String.valueOf(xdsNonces.get(resourceType)).equals(value.getResponseNonce())) {
               logger.log(Level.FINE, "Resource nonce does not match, ignore.");
               return;
             }
-
             Set<String> requestedResourceNames = new HashSet<>(value.getResourceNamesList());
             if (subscribers.get(resourceType).containsKey(responseObserver)
                 && subscribers.get(resourceType).get(responseObserver)
@@ -152,11 +149,9 @@ final class XdsTestControlPlaneService extends
                   value.getResourceNamesList());
               return;
             }
-
             if (!xdsNonces.get(resourceType).containsKey(responseObserver)) {
               xdsNonces.get(resourceType).put(responseObserver, new AtomicInteger(0));
             }
-
             DiscoveryResponse response = generateResponse(resourceType,
                 String.valueOf(xdsVersions.get(resourceType)),
                 String.valueOf(xdsNonces.get(resourceType).get(responseObserver)),
@@ -181,9 +176,8 @@ final class XdsTestControlPlaneService extends
           xdsNonces.get(type).remove(responseObserver);
         }
       }
-    }
-
-    return new AdsStreamObserver();
+    };
+    return requestObserver;
   }
 
   //must run in syncContext

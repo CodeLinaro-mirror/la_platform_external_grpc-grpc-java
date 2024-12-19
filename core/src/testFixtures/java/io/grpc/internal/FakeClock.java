@@ -188,8 +188,7 @@ public final class FakeClock {
     }
 
     @Override public boolean isShutdown() {
-      // If shutdown is not implemented, then it is never shutdown.
-      return false;
+      throw new UnsupportedOperationException();
     }
 
     @Override public boolean isTerminated() {

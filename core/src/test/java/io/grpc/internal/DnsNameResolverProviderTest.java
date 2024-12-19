@@ -61,7 +61,9 @@ public class DnsNameResolverProviderTest {
   @Test
   public void newNameResolver() {
     assertSame(DnsNameResolver.class,
-        provider.newNameResolver(URI.create("dns:///localhost:443"), args).getClass());
+        ((RetryingNameResolver) provider.newNameResolver(
+            URI.create("dns:///localhost:443"), args))
+            .getRetriedNameResolver().getClass());
     assertNull(
         provider.newNameResolver(URI.create("notdns:///localhost:443"), args));
   }

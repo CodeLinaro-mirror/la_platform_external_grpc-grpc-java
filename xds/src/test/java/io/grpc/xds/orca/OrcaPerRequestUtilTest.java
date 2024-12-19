@@ -124,8 +124,7 @@ public class OrcaPerRequestUtilTest {
         && a.getQps() == b.getQps()
         && a.getEps() == b.getEps()
         && Objects.equal(a.getRequestCostMetrics(), b.getRequestCostMetrics())
-        && Objects.equal(a.getUtilizationMetrics(), b.getUtilizationMetrics())
-        && Objects.equal(a.getNamedMetrics(), b.getNamedMetrics());
+        && Objects.equal(a.getUtilizationMetrics(), b.getUtilizationMetrics());
   }
 
   /**

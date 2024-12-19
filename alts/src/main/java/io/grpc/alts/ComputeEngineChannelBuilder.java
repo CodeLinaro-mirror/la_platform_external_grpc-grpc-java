@@ -35,7 +35,7 @@ public final class ComputeEngineChannelBuilder
   }
 
   /** "Overrides" the static method in {@link ManagedChannelBuilder}. */
-  public static ComputeEngineChannelBuilder forTarget(String target) {
+  public static final ComputeEngineChannelBuilder forTarget(String target) {
     return new ComputeEngineChannelBuilder(target);
   }
 
@@ -45,7 +45,6 @@ public final class ComputeEngineChannelBuilder
   }
 
   @Override
-  @SuppressWarnings("deprecation") // Not extending ForwardingChannelBuilder2 to preserve ABI.
   protected NettyChannelBuilder delegate() {
     return delegate;
   }

@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_jvm_external//:defs.bzl", "artifact")
 load(":java_grpc_library.bzl", "java_grpc_library")
 
 java_proto_library(
@@ -34,9 +33,9 @@ java_library(
         "//protobuf",
         "//stub",
         "//stub:javax_annotation",
+        "@com_google_code_findbugs_jsr305//jar",
+        "@com_google_guava_guava//jar",
         "@com_google_protobuf//:protobuf_java",
-        artifact("com.google.code.findbugs:jsr305"),
-        artifact("com.google.guava:guava"),
     ],
 )
 
@@ -48,8 +47,8 @@ java_library(
         "//protobuf-lite",
         "//stub",
         "//stub:javax_annotation",
-        artifact("com.google.code.findbugs:jsr305"),
-        artifact("com.google.guava:guava"),
+        "@com_google_code_findbugs_jsr305//jar",
+        "@com_google_guava_guava//jar",
     ],
 )
 
@@ -57,7 +56,7 @@ java_plugin(
     name = "auto_value",
     generates_api = 1,
     processor_class = "com.google.auto.value.processor.AutoValueProcessor",
-    deps = [artifact("com.google.auto.value:auto-value")],
+    deps = ["@com_google_auto_value_auto_value//jar"],
 )
 
 java_library(
@@ -66,7 +65,7 @@ java_library(
     neverlink = 1,
     visibility = ["//:__subpackages__"],
     exports = [
-        artifact("com.google.auto.value:auto-value-annotations"),
-        artifact("org.apache.tomcat:annotations-api"),  # @Generated for Java 9+
+        "@com_google_auto_value_auto_value_annotations//jar",
+        "@org_apache_tomcat_annotations_api//jar",  # @Generated for Java 9+
     ],
 )

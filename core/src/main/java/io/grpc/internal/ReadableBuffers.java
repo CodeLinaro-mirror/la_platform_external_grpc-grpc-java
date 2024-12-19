@@ -16,7 +16,7 @@
 
 package io.grpc.internal;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
+import static com.google.common.base.Charsets.UTF_8;
 
 import com.google.common.base.Preconditions;
 import io.grpc.Detachable;
@@ -415,7 +415,6 @@ public final class ReadableBuffers {
     public InputStream detach() {
       ReadableBuffer detachedBuffer = buffer;
       buffer = buffer.readBytes(0);
-      detachedBuffer.touch();
       return new BufferInputStream(detachedBuffer);
     }
 

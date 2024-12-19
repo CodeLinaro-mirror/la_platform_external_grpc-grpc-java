@@ -9,17 +9,17 @@ plugins {
 description = "gRPC: Testing"
 
 dependencies {
-    api project(':grpc-util'),
+    api project(':grpc-core'),
             project(':grpc-stub'),
             libraries.junit
-    implementation project(':grpc-inprocess')
-    implementation project(':grpc-core')
     // Only io.grpc.internal.testing.StatsTestUtils depends on opencensus_api, for internal use.
-    compileOnly libraries.opencensus.api,
-            project(":grpc-context") // Override opencensus dependency with our newer version
-    runtimeOnly project(":grpc-api")   // Pull in newer version than census-api
+    compileOnly libraries.opencensus.api
+    runtimeOnly project(":grpc-context") // Pull in newer version than census-api
 
-    testImplementation libraries.mockito.core
+    testImplementation (libraries.mockito.core) {
+        // prefer our own versions instead of mockito's dependency
+        exclude group: 'org.hamcrest', module: 'hamcrest-core'
+    }
 
     testImplementation project(':grpc-testing-proto'),
             testFixtures(project(':grpc-core'))

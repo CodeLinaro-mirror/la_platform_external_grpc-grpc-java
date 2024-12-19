@@ -63,14 +63,13 @@ class ShufflingPickFirstLoadBalancer extends LoadBalancer {
   }
 
   @Override
-  public Status acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
+  public boolean acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
     List<EquivalentAddressGroup> servers = new ArrayList<>(resolvedAddresses.getAddresses());
     if (servers.isEmpty()) {
-      Status unavailableStatus = Status.UNAVAILABLE.withDescription(
+      handleNameResolutionError(Status.UNAVAILABLE.withDescription(
           "NameResolver returned no usable address. addrs=" + resolvedAddresses.getAddresses()
-              + ", attrs=" + resolvedAddresses.getAttributes());
-      handleNameResolutionError(unavailableStatus);
-      return unavailableStatus;
+              + ", attrs=" + resolvedAddresses.getAttributes()));
+      return false;
     }
 
     Config config
@@ -98,7 +97,7 @@ class ShufflingPickFirstLoadBalancer extends LoadBalancer {
       subchannel.updateAddresses(servers);
     }
 
-    return Status.OK;
+    return true;
   }
 
   @Override

@@ -83,13 +83,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
-import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.annotation.Nullable;
@@ -297,7 +293,6 @@ class OkHttpClientTransport implements ConnectionClientTransport, TransportExcep
   /**
    * Create a transport connected to a fake peer for test.
    */
-  @SuppressWarnings("AddressSelection") // An IP address always returns one address
   @VisibleForTesting
   OkHttpClientTransport(
       OkHttpChannelBuilder.OkHttpTransportFactory transportFactory,
@@ -503,18 +498,20 @@ class OkHttpClientTransport implements ConnectionClientTransport, TransportExcep
       outboundFlow = new OutboundFlowController(this, frameWriter);
     }
     final CountDownLatch latch = new CountDownLatch(1);
-    final CountDownLatch latchForExtraThread = new CountDownLatch(1);
-    // The transport needs up to two threads to function once started,
-    // but only needs one during handshaking. Start another thread during handshaking
-    // to make sure there's still a free thread available. If the number of threads is exhausted,
-    // it is better to kill the transport than for all the transports to hang unable to send.
-    CyclicBarrier barrier = new CyclicBarrier(2);
     // Connecting in the serializingExecutor, so that some stream operations like synStream
     // will be executed after connected.
-
     serializingExecutor.execute(new Runnable() {
       @Override
       public void run() {
+        // This is a hack to make sure the connection preface and initial settings to be sent out
+        // without blocking the start. By doing this essentially prevents potential deadlock when
+        // network is not available during startup while another thread holding lock to send the
+        // initial preface.
+        try {
+          latch.await();
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
         // Use closed source on failure so that the reader immediately shuts down.
         BufferedSource source = Okio.buffer(new Source() {
           @Override
@@ -534,22 +531,6 @@ class OkHttpClientTransport implements ConnectionClientTransport, TransportExcep
         Socket sock;
         SSLSession sslSession = null;
         try {
-          // This is a hack to make sure the connection preface and initial settings to be sent out
-          // without blocking the start. By doing this essentially prevents potential deadlock when
-          // network is not available during startup while another thread holding lock to send the
-          // initial preface.
-          try {
-            latch.await();
-            barrier.await(1000, TimeUnit.MILLISECONDS);
-          } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-          } catch (TimeoutException | BrokenBarrierException e) {
-            startGoAway(0, ErrorCode.INTERNAL_ERROR, Status.UNAVAILABLE
-                .withDescription("Timed out waiting for second handshake thread. "
-                    + "The transport executor pool may have run out of threads"));
-            return;
-          }
-
           if (proxiedAddr == null) {
             sock = socketFactory.createSocket(address.getAddress(), address.getPort());
           } else {
@@ -593,28 +574,12 @@ class OkHttpClientTransport implements ConnectionClientTransport, TransportExcep
           return;
         } finally {
           clientFrameHandler = new ClientFrameHandler(variant.newReader(source, true));
-          latchForExtraThread.countDown();
         }
         synchronized (lock) {
           socket = Preconditions.checkNotNull(sock, "socket");
           if (sslSession != null) {
             securityInfo = new InternalChannelz.Security(new InternalChannelz.Tls(sslSession));
           }
-        }
-      }
-    });
-
-    executor.execute(new Runnable() {
-      @Override
-      public void run() {
-        try {
-          barrier.await(1000, TimeUnit.MILLISECONDS);
-          latchForExtraThread.await();
-        } catch (BrokenBarrierException | TimeoutException e) {
-          // Something bad happened, maybe too few threads available!
-          // This will be handled in the handshake thread.
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
         }
       }
     });
@@ -987,8 +952,8 @@ class OkHttpClientTransport implements ConnectionClientTransport, TransportExcep
         }
         if (!startPendingStreams()) {
           stopIfNecessary();
+          maybeClearInUse(stream);
         }
-        maybeClearInUse(stream);
       }
     }
   }
@@ -1132,7 +1097,6 @@ class OkHttpClientTransport implements ConnectionClientTransport, TransportExcep
     }
 
     @Override
-    @SuppressWarnings("Finally")
     public void run() {
       String threadName = Thread.currentThread().getName();
       Thread.currentThread().setName("OkHttpClientTransport");
@@ -1165,15 +1129,6 @@ class OkHttpClientTransport implements ConnectionClientTransport, TransportExcep
           frameReader.close();
         } catch (IOException ex) {
           log.log(Level.INFO, "Exception closing frame reader", ex);
-        } catch (RuntimeException e) {
-          // This same check is done in okhttp proper:
-          // https://github.com/square/okhttp/blob/3cc0f4917cbda03cb31617f8ead1e0aeb19de2fb/okhttp/src/main/kotlin/okhttp3/internal/-UtilJvm.kt#L270
-
-          // Conscrypt in Android 10 and 11 may throw closing an SSLSocket. This is safe to ignore.
-          // https://issuetracker.google.com/issues/177450597
-          if (!"bio == null".equals(e.getMessage())) {
-            throw e;
-          }
         }
         listener.transportTerminated();
         Thread.currentThread().setName(threadName);
@@ -1185,8 +1140,7 @@ class OkHttpClientTransport implements ConnectionClientTransport, TransportExcep
      */
     @SuppressWarnings("GuardedBy")
     @Override
-    public void data(boolean inFinished, int streamId, BufferedSource in, int length,
-                     int paddedLength)
+    public void data(boolean inFinished, int streamId, BufferedSource in, int length)
         throws IOException {
       logger.logData(OkHttpFrameLogger.Direction.INBOUND,
           streamId, in.getBuffer(), length, inFinished);
@@ -1212,12 +1166,12 @@ class OkHttpClientTransport implements ConnectionClientTransport, TransportExcep
         synchronized (lock) {
           // TODO(b/145386688): This access should be guarded by 'stream.transportState().lock';
           // instead found: 'OkHttpClientTransport.this.lock'
-          stream.transportState().transportDataReceived(buf, inFinished, paddedLength - length);
+          stream.transportState().transportDataReceived(buf, inFinished);
         }
       }
 
       // connection window update
-      connectionUnacknowledgedBytesRead += paddedLength;
+      connectionUnacknowledgedBytesRead += length;
       if (connectionUnacknowledgedBytesRead >= initialWindowSize * DEFAULT_WINDOW_UPDATE_RATIO) {
         synchronized (lock) {
           frameWriter.windowUpdate(0, connectionUnacknowledgedBytesRead);
@@ -1328,7 +1282,6 @@ class OkHttpClientTransport implements ConnectionClientTransport, TransportExcep
           outboundWindowSizeIncreased = outboundFlow.initialOutboundWindowSize(initialWindowSize);
         }
         if (firstSettings) {
-          attributes = listener.filterTransport(attributes);
           listener.transportReady();
           firstSettings = false;
         }

@@ -57,10 +57,6 @@ enum ProtoFlavor {
   NORMAL, LITE
 };
 
-enum GeneratedAnnotation {
-  OMIT, JAVAX
-};
-
 // Returns the package name of the gRPC services defined in the given file.
 std::string ServiceJavaPackage(const impl::protobuf::FileDescriptor* file);
 
@@ -72,8 +68,7 @@ std::string ServiceClassName(const impl::protobuf::ServiceDescriptor* service);
 void GenerateService(const impl::protobuf::ServiceDescriptor* service,
                      impl::protobuf::io::ZeroCopyOutputStream* out,
                      ProtoFlavor flavor,
-                     bool disable_version,
-                     GeneratedAnnotation generated_annotation);
+                     bool disable_version);
 
 }  // namespace java_grpc_generator
 

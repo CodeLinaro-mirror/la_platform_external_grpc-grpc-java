@@ -20,13 +20,13 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.base.MoreObjects;
-import com.google.common.base.MoreObjects.ToStringHelper;
 import com.google.common.base.Objects;
 import com.google.errorprone.annotations.InlineMe;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -76,9 +76,6 @@ public abstract class NameResolver {
    * Starts the resolution. The method is not supposed to throw any exceptions. That might cause the
    * Channel that the name resolver is serving to crash. Errors should be propagated
    * through {@link Listener#onError}.
-   * 
-   * <p>An instance may not be started more than once, by any overload of this method, even after
-   * an intervening call to {@link #shutdown}.
    *
    * @param listener used to receive updates on the target
    * @since 1.0.0
@@ -95,8 +92,7 @@ public abstract class NameResolver {
 
           @Override
           public void onResult(ResolutionResult resolutionResult) {
-            listener.onAddresses(resolutionResult.getAddressesOrError().getValue(),
-                resolutionResult.getAttributes());
+            listener.onAddresses(resolutionResult.getAddresses(), resolutionResult.getAttributes());
           }
       });
     }
@@ -106,9 +102,6 @@ public abstract class NameResolver {
    * Starts the resolution. The method is not supposed to throw any exceptions. That might cause the
    * Channel that the name resolver is serving to crash. Errors should be propagated
    * through {@link Listener2#onError}.
-   * 
-   * <p>An instance may not be started more than once, by any overload of this method, even after
-   * an intervening call to {@link #shutdown}.
    *
    * @param listener used to receive updates on the target
    * @since 1.21.0
@@ -219,23 +212,19 @@ public abstract class NameResolver {
     @Override
     @Deprecated
     @InlineMe(
-        replacement = "this.onResult(ResolutionResult.newBuilder().setAddressesOrError("
-            + "StatusOr.fromValue(servers)).setAttributes(attributes).build())",
-        imports = {"io.grpc.NameResolver.ResolutionResult", "io.grpc.StatusOr"})
+        replacement = "this.onResult(ResolutionResult.newBuilder().setAddresses(servers)"
+            + ".setAttributes(attributes).build())",
+        imports = "io.grpc.NameResolver.ResolutionResult")
     public final void onAddresses(
         List<EquivalentAddressGroup> servers, @ResolutionResultAttr Attributes attributes) {
       // TODO(jihuncho) need to promote Listener2 if we want to use ConfigOrError
-      // Calling onResult and not onResult2 because onResult2 can only be called from a
-      // synchronization context.
       onResult(
-          ResolutionResult.newBuilder().setAddressesOrError(
-              StatusOr.fromValue(servers)).setAttributes(attributes).build());
+          ResolutionResult.newBuilder().setAddresses(servers).setAttributes(attributes).build());
     }
 
     /**
      * Handles updates on resolved addresses and attributes.  If
-     * {@link ResolutionResult#getAddressesOrError()} is empty, {@link #onError(Status)} will be
-     * called.
+     * {@link ResolutionResult#getAddresses()} is empty, {@link #onError(Status)} will be called.
      *
      * @param resolutionResult the resolved server addresses, attributes, and Service Config.
      * @since 1.21.0
@@ -251,17 +240,6 @@ public abstract class NameResolver {
      */
     @Override
     public abstract void onError(Status error);
-
-    /**
-     * Handles updates on resolved addresses and attributes.
-     *
-     * @param resolutionResult the resolved server addresses, attributes, and Service Config.
-     * @since 1.66
-     */
-    public Status onResult2(ResolutionResult resolutionResult) {
-      onResult(resolutionResult);
-      return Status.OK;
-    }
   }
 
   /**
@@ -290,7 +268,6 @@ public abstract class NameResolver {
     @Nullable private final ChannelLogger channelLogger;
     @Nullable private final Executor executor;
     @Nullable private final String overrideAuthority;
-    @Nullable private final MetricRecorder metricRecorder;
 
     private Args(
         Integer defaultPort,
@@ -300,8 +277,7 @@ public abstract class NameResolver {
         @Nullable ScheduledExecutorService scheduledExecutorService,
         @Nullable ChannelLogger channelLogger,
         @Nullable Executor executor,
-        @Nullable String overrideAuthority,
-        @Nullable MetricRecorder metricRecorder) {
+        @Nullable String overrideAuthority) {
       this.defaultPort = checkNotNull(defaultPort, "defaultPort not set");
       this.proxyDetector = checkNotNull(proxyDetector, "proxyDetector not set");
       this.syncContext = checkNotNull(syncContext, "syncContext not set");
@@ -310,7 +286,6 @@ public abstract class NameResolver {
       this.channelLogger = channelLogger;
       this.executor = executor;
       this.overrideAuthority = overrideAuthority;
-      this.metricRecorder = metricRecorder;
     }
 
     /**
@@ -408,14 +383,6 @@ public abstract class NameResolver {
       return overrideAuthority;
     }
 
-    /**
-     * Returns the {@link MetricRecorder} that the channel uses to record metrics.
-     */
-    @Nullable
-    public MetricRecorder getMetricRecorder() {
-      return metricRecorder;
-    }
-
 
     @Override
     public String toString() {
@@ -428,7 +395,6 @@ public abstract class NameResolver {
           .add("channelLogger", channelLogger)
           .add("executor", executor)
           .add("overrideAuthority", overrideAuthority)
-          .add("metricRecorder", metricRecorder)
           .toString();
     }
 
@@ -447,7 +413,6 @@ public abstract class NameResolver {
       builder.setChannelLogger(channelLogger);
       builder.setOffloadExecutor(executor);
       builder.setOverrideAuthority(overrideAuthority);
-      builder.setMetricRecorder(metricRecorder);
       return builder;
     }
 
@@ -474,7 +439,6 @@ public abstract class NameResolver {
       private ChannelLogger channelLogger;
       private Executor executor;
       private String overrideAuthority;
-      private MetricRecorder metricRecorder;
 
       Builder() {
       }
@@ -562,14 +526,6 @@ public abstract class NameResolver {
       }
 
       /**
-       * See {@link Args#getMetricRecorder()}. This is an optional field.
-       */
-      public Builder setMetricRecorder(MetricRecorder metricRecorder) {
-        this.metricRecorder = metricRecorder;
-        return this;
-      }
-
-      /**
        * Builds an {@link Args}.
        *
        * @since 1.21.0
@@ -578,8 +534,7 @@ public abstract class NameResolver {
         return
             new Args(
                 defaultPort, proxyDetector, syncContext, serviceConfigParser,
-                scheduledExecutorService, channelLogger, executor, overrideAuthority,
-                metricRecorder);
+                scheduledExecutorService, channelLogger, executor, overrideAuthority);
       }
     }
   }
@@ -612,17 +567,17 @@ public abstract class NameResolver {
    */
   @ExperimentalApi("https://github.com/grpc/grpc-java/issues/1770")
   public static final class ResolutionResult {
-    private final StatusOr<List<EquivalentAddressGroup>> addressesOrError;
+    private final List<EquivalentAddressGroup> addresses;
     @ResolutionResultAttr
     private final Attributes attributes;
     @Nullable
     private final ConfigOrError serviceConfig;
 
     ResolutionResult(
-        StatusOr<List<EquivalentAddressGroup>> addressesOrError,
+        List<EquivalentAddressGroup> addresses,
         @ResolutionResultAttr Attributes attributes,
         ConfigOrError serviceConfig) {
-      this.addressesOrError = addressesOrError;
+      this.addresses = Collections.unmodifiableList(new ArrayList<>(addresses));
       this.attributes = checkNotNull(attributes, "attributes");
       this.serviceConfig = serviceConfig;
     }
@@ -643,7 +598,7 @@ public abstract class NameResolver {
      */
     public Builder toBuilder() {
       return newBuilder()
-          .setAddressesOrError(addressesOrError)
+          .setAddresses(addresses)
           .setAttributes(attributes)
           .setServiceConfig(serviceConfig);
     }
@@ -652,20 +607,9 @@ public abstract class NameResolver {
      * Gets the addresses resolved by name resolution.
      *
      * @since 1.21.0
-     * @deprecated Will be superseded by getAddressesOrError
      */
-    @Deprecated
     public List<EquivalentAddressGroup> getAddresses() {
-      return addressesOrError.getValue();
-    }
-
-    /**
-     * Gets the addresses resolved by name resolution or the error in doing so.
-     *
-     * @since 1.65.0
-     */
-    public StatusOr<List<EquivalentAddressGroup>> getAddressesOrError() {
-      return addressesOrError;
+      return addresses;
     }
 
     /**
@@ -691,11 +635,11 @@ public abstract class NameResolver {
 
     @Override
     public String toString() {
-      ToStringHelper stringHelper = MoreObjects.toStringHelper(this);
-      stringHelper.add("addressesOrError", addressesOrError.toString());
-      stringHelper.add("attributes", attributes);
-      stringHelper.add("serviceConfigOrError", serviceConfig);
-      return stringHelper.toString();
+      return MoreObjects.toStringHelper(this)
+          .add("addresses", addresses)
+          .add("attributes", attributes)
+          .add("serviceConfig", serviceConfig)
+          .toString();
     }
 
     /**
@@ -707,7 +651,7 @@ public abstract class NameResolver {
         return false;
       }
       ResolutionResult that = (ResolutionResult) obj;
-      return Objects.equal(this.addressesOrError, that.addressesOrError)
+      return Objects.equal(this.addresses, that.addresses)
           && Objects.equal(this.attributes, that.attributes)
           && Objects.equal(this.serviceConfig, that.serviceConfig);
     }
@@ -717,7 +661,7 @@ public abstract class NameResolver {
      */
     @Override
     public int hashCode() {
-      return Objects.hashCode(addressesOrError, attributes, serviceConfig);
+      return Objects.hashCode(addresses, attributes, serviceConfig);
     }
 
     /**
@@ -727,8 +671,7 @@ public abstract class NameResolver {
      */
     @ExperimentalApi("https://github.com/grpc/grpc-java/issues/1770")
     public static final class Builder {
-      private StatusOr<List<EquivalentAddressGroup>> addresses =
-          StatusOr.fromValue(Collections.emptyList());
+      private List<EquivalentAddressGroup> addresses = Collections.emptyList();
       private Attributes attributes = Attributes.EMPTY;
       @Nullable
       private ConfigOrError serviceConfig;
@@ -740,21 +683,9 @@ public abstract class NameResolver {
        * Sets the addresses resolved by name resolution.  This field is required.
        *
        * @since 1.21.0
-       * @deprecated Will be superseded by setAddressesOrError
        */
-      @Deprecated
       public Builder setAddresses(List<EquivalentAddressGroup> addresses) {
-        setAddressesOrError(StatusOr.fromValue(addresses));
-        return this;
-      }
-
-      /**
-       * Sets the addresses resolved by name resolution or the error in doing so. This field is
-       * required.
-       * @param addresses Resolved addresses or an error in resolving addresses
-       */
-      public Builder setAddressesOrError(StatusOr<List<EquivalentAddressGroup>> addresses) {
-        this.addresses = checkNotNull(addresses, "StatusOr addresses cannot be null.");
+        this.addresses = addresses;
         return this;
       }
 

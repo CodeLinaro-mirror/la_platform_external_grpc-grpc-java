@@ -21,11 +21,8 @@ import io.grpc.EquivalentAddressGroup;
 import io.grpc.NameResolver;
 import io.grpc.NameResolverProvider;
 import io.grpc.Status;
-import io.grpc.StatusOr;
 import java.net.SocketAddress;
 import java.net.URI;
-import java.util.Collection;
-import java.util.Collections;
 
 /** A name resolver to always resolve the given URI into the given address. */
 public final class FakeNameResolverProvider extends NameResolverProvider {
@@ -53,17 +50,12 @@ public final class FakeNameResolverProvider extends NameResolverProvider {
 
   @Override
   protected int priority() {
-    return 10; // High priority
+    return 5; // Default
   }
 
   @Override
   public String getDefaultScheme() {
     return targetUri.getScheme();
-  }
-
-  @Override
-  public Collection<Class<? extends SocketAddress>> getProducedSocketAddressTypes() {
-    return Collections.singleton(address.getClass());
   }
 
   /** A single name resolver. */
@@ -82,10 +74,9 @@ public final class FakeNameResolverProvider extends NameResolverProvider {
       if (shutdown) {
         listener.onError(Status.FAILED_PRECONDITION.withDescription("Resolver is shutdown"));
       } else {
-        listener.onResult2(
+        listener.onResult(
             ResolutionResult.newBuilder()
-                .setAddressesOrError(
-                    StatusOr.fromValue(ImmutableList.of(new EquivalentAddressGroup(address))))
+                .setAddresses(ImmutableList.of(new EquivalentAddressGroup(address)))
                 .build());
       }
     }

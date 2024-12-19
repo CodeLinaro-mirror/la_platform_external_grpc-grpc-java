@@ -22,7 +22,6 @@ java_library_static {
     host_supported: true,
     device_supported: false,
     srcs: [
-        "src/main/proto/grpc/reflection/v1/reflection.proto",
         "src/main/proto/grpc/reflection/v1alpha/reflection.proto",
     ],
     proto: {
@@ -42,8 +41,6 @@ java_library_host {
     name: "grpc-java-reflection",
     srcs: [
         "src/main/java/io/grpc/protobuf/services/ProtoReflectionService.java",
-        "src/main/java/io/grpc/protobuf/services/ProtoReflectionServiceV1.java",
-        "src/main/proto/grpc/reflection/v1/reflection.proto",
         "src/main/proto/grpc/reflection/v1alpha/reflection.proto",
     ],
     proto: {

@@ -20,7 +20,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static io.grpc.ClientStreamTracer.NAME_RESOLUTION_DELAYED;
-import static io.grpc.ConnectivityState.CONNECTING;
 import static io.grpc.ConnectivityState.IDLE;
 import static io.grpc.ConnectivityState.SHUTDOWN;
 import static io.grpc.ConnectivityState.TRANSIENT_FAILURE;
@@ -43,15 +42,13 @@ import io.grpc.ClientCall;
 import io.grpc.ClientInterceptor;
 import io.grpc.ClientInterceptors;
 import io.grpc.ClientStreamTracer;
-import io.grpc.ClientTransportFilter;
 import io.grpc.CompressorRegistry;
 import io.grpc.ConnectivityState;
 import io.grpc.ConnectivityStateInfo;
 import io.grpc.Context;
-import io.grpc.Deadline;
 import io.grpc.DecompressorRegistry;
 import io.grpc.EquivalentAddressGroup;
-import io.grpc.ForwardingChannelBuilder2;
+import io.grpc.ForwardingChannelBuilder;
 import io.grpc.ForwardingClientCall;
 import io.grpc.Grpc;
 import io.grpc.InternalChannelz;
@@ -72,16 +69,12 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
-import io.grpc.MetricInstrumentRegistry;
-import io.grpc.MetricRecorder;
 import io.grpc.NameResolver;
 import io.grpc.NameResolver.ConfigOrError;
 import io.grpc.NameResolver.ResolutionResult;
-import io.grpc.NameResolverProvider;
 import io.grpc.NameResolverRegistry;
 import io.grpc.ProxyDetector;
 import io.grpc.Status;
-import io.grpc.StatusOr;
 import io.grpc.SynchronizationContext;
 import io.grpc.SynchronizationContext.ScheduledHandle;
 import io.grpc.internal.AutoConfiguredLoadBalancerFactory.AutoConfiguredLoadBalancer;
@@ -95,6 +88,7 @@ import io.grpc.internal.RetriableStream.ChannelBufferMeter;
 import io.grpc.internal.RetriableStream.Throttle;
 import io.grpc.internal.RetryingNameResolver.ResolutionResultListener;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -116,6 +110,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
@@ -126,6 +121,12 @@ final class ManagedChannelImpl extends ManagedChannel implements
     InternalInstrumented<ChannelStats> {
   @VisibleForTesting
   static final Logger logger = Logger.getLogger(ManagedChannelImpl.class.getName());
+
+  // Matching this pattern means the target string is a URI target or at least intended to be one.
+  // A URI target must be an absolute hierarchical URI.
+  // From RFC 2396: scheme = alpha *( alpha | digit | "+" | "-" | "." )
+  @VisibleForTesting
+  static final Pattern URI_PATTERN = Pattern.compile("[a-zA-Z][a-zA-Z0-9+.-]*:/.*");
 
   static final long IDLE_TIMEOUT_MILLIS_DISABLE = -1;
 
@@ -152,16 +153,13 @@ final class ManagedChannelImpl extends ManagedChannel implements
           throw new IllegalStateException("Resolution is pending");
         }
       };
-  private static final LoadBalancer.PickDetailsConsumer NOOP_PICK_DETAILS_CONSUMER =
-      new LoadBalancer.PickDetailsConsumer() {};
 
   private final InternalLogId logId;
   private final String target;
   @Nullable
   private final String authorityOverride;
   private final NameResolverRegistry nameResolverRegistry;
-  private final URI targetUri;
-  private final NameResolverProvider nameResolverProvider;
+  private final NameResolver.Factory nameResolverFactory;
   private final NameResolver.Args nameResolverArgs;
   private final AutoConfiguredLoadBalancerFactory loadBalancerFactory;
   private final ClientTransportFactory originalTransportFactory;
@@ -197,7 +195,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
   private final CompressorRegistry compressorRegistry;
 
   private final Supplier<Stopwatch> stopwatchSupplier;
-  /** The timeout before entering idle mode. */
+  /** The timout before entering idle mode. */
   private final long idleTimeoutMillis;
 
   private final ConnectivityStateManager channelStateManager = new ConnectivityStateManager();
@@ -209,8 +207,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
    * {@link RealChannel}.
    */
   private final Channel interceptorChannel;
-
-  private final List<ClientTransportFilter> transportFilters;
   @Nullable private final String userAgent;
 
   // Only null after channel is terminated. Must be assigned from the syncContext.
@@ -302,8 +298,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
   // Temporary false flag that can skip the retry code path.
   private final boolean retryEnabled;
 
-  private final Deadline.Ticker ticker = Deadline.getSystemTicker();
-
   // Called from syncContext
   private final ManagedClientTransport.Listener delayedTransportListener =
       new DelayedTransportListener();
@@ -379,7 +373,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
       nameResolverStarted = false;
       if (channelIsActive) {
         nameResolver = getNameResolver(
-            targetUri, authorityOverride, nameResolverProvider, nameResolverArgs);
+            target, authorityOverride, nameResolverFactory, nameResolverArgs);
       } else {
         nameResolver = null;
       }
@@ -421,7 +415,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
     // may throw. We don't want to confuse our state, even if we will enter panic mode.
     this.lbHelper = lbHelper;
 
-    channelStateManager.gotoState(CONNECTING);
     NameResolverListener listener = new NameResolverListener(lbHelper, nameResolver);
     nameResolver.start(listener);
     nameResolverStarted = true;
@@ -472,20 +465,57 @@ final class ManagedChannelImpl extends ManagedChannel implements
   private final class ChannelStreamProvider implements ClientStreamProvider {
     volatile Throttle throttle;
 
+    private ClientTransport getTransport(PickSubchannelArgs args) {
+      SubchannelPicker pickerCopy = subchannelPicker;
+      if (shutdown.get()) {
+        // If channel is shut down, delayedTransport is also shut down which will fail the stream
+        // properly.
+        return delayedTransport;
+      }
+      if (pickerCopy == null) {
+        final class ExitIdleModeForTransport implements Runnable {
+          @Override
+          public void run() {
+            exitIdleMode();
+          }
+        }
+
+        syncContext.execute(new ExitIdleModeForTransport());
+        return delayedTransport;
+      }
+      // There is no need to reschedule the idle timer here.
+      //
+      // pickerCopy != null, which means idle timer has not expired when this method starts.
+      // Even if idle timer expires right after we grab pickerCopy, and it shuts down LoadBalancer
+      // which calls Subchannel.shutdown(), the InternalSubchannel will be actually shutdown after
+      // SUBCHANNEL_SHUTDOWN_DELAY_SECONDS, which gives the caller time to start RPC on it.
+      //
+      // In most cases the idle timer is scheduled to fire after the transport has created the
+      // stream, which would have reported in-use state to the channel that would have cancelled
+      // the idle timer.
+      PickResult pickResult = pickerCopy.pickSubchannel(args);
+      ClientTransport transport = GrpcUtil.getTransportFromPickResult(
+          pickResult, args.getCallOptions().isWaitForReady());
+      if (transport != null) {
+        return transport;
+      }
+      return delayedTransport;
+    }
+
     @Override
     public ClientStream newStream(
         final MethodDescriptor<?, ?> method,
         final CallOptions callOptions,
         final Metadata headers,
         final Context context) {
-      // There is no need to reschedule the idle timer here. If the channel isn't shut down, either
-      // the delayed transport or a real transport will go in-use and cancel the idle timer.
       if (!retryEnabled) {
+        ClientTransport transport =
+            getTransport(new PickSubchannelArgsImpl(method, headers, callOptions));
+        Context origContext = context.attach();
         ClientStreamTracer[] tracers = GrpcUtil.getClientStreamTracers(
             callOptions, headers, 0, /* isTransparentRetry= */ false);
-        Context origContext = context.attach();
         try {
-          return delayedTransport.newStream(method, headers, callOptions, tracers);
+          return transport.newStream(method, headers, callOptions, tracers);
         } finally {
           context.detach(origContext);
         }
@@ -526,9 +556,11 @@ final class ManagedChannelImpl extends ManagedChannel implements
             CallOptions newOptions = callOptions.withStreamTracerFactory(factory);
             ClientStreamTracer[] tracers = GrpcUtil.getClientStreamTracers(
                 newOptions, newHeaders, previousAttempts, isTransparentRetry);
+            ClientTransport transport =
+                getTransport(new PickSubchannelArgsImpl(method, newHeaders, newOptions));
             Context origContext = context.attach();
             try {
-              return delayedTransport.newStream(method, newHeaders, newOptions, tracers);
+              return transport.newStream(method, newHeaders, newOptions, tracers);
             } finally {
               context.detach(origContext);
             }
@@ -543,13 +575,10 @@ final class ManagedChannelImpl extends ManagedChannel implements
   private final ChannelStreamProvider transportProvider = new ChannelStreamProvider();
 
   private final Rescheduler idleTimer;
-  private final MetricRecorder metricRecorder;
 
   ManagedChannelImpl(
       ManagedChannelImplBuilder builder,
       ClientTransportFactory clientTransportFactory,
-      URI targetUri,
-      NameResolverProvider nameResolverProvider,
       BackoffPolicy.Provider backoffPolicyProvider,
       ObjectPool<? extends Executor> balancerRpcExecutorPool,
       Supplier<Stopwatch> stopwatchSupplier,
@@ -580,8 +609,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
     this.retryEnabled = builder.retryEnabled;
     this.loadBalancerFactory = new AutoConfiguredLoadBalancerFactory(builder.defaultLbPolicy);
     this.nameResolverRegistry = builder.nameResolverRegistry;
-    this.targetUri = checkNotNull(targetUri, "targetUri");
-    this.nameResolverProvider = checkNotNull(nameResolverProvider, "nameResolverProvider");
     ScParser serviceConfigParser =
         new ScParser(
             retryEnabled,
@@ -589,8 +616,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
             builder.maxHedgedAttempts,
             loadBalancerFactory);
     this.authorityOverride = builder.authorityOverride;
-    this.metricRecorder = new MetricRecorderImpl(builder.metricSinks,
-        MetricInstrumentRegistry.getDefaultRegistry());
     this.nameResolverArgs =
         NameResolver.Args.newBuilder()
             .setDefaultPort(builder.getDefaultPort())
@@ -601,10 +626,10 @@ final class ManagedChannelImpl extends ManagedChannel implements
             .setChannelLogger(channelLogger)
             .setOffloadExecutor(this.offloadExecutorHolder)
             .setOverrideAuthority(this.authorityOverride)
-            .setMetricRecorder(this.metricRecorder)
             .build();
+    this.nameResolverFactory = builder.nameResolverFactory;
     this.nameResolver = getNameResolver(
-        targetUri, authorityOverride, nameResolverProvider, nameResolverArgs);
+        target, authorityOverride, nameResolverFactory, nameResolverArgs);
     this.balancerRpcExecutorPool = checkNotNull(balancerRpcExecutorPool, "balancerRpcExecutorPool");
     this.balancerRpcExecutorHolder = new ExecutorHolder(balancerRpcExecutorPool);
     this.delayedTransport = new DelayedClientTransport(this.executor, this.syncContext);
@@ -620,7 +645,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
           parsedDefaultServiceConfig.getError());
       this.defaultServiceConfig =
           (ManagedChannelServiceConfig) parsedDefaultServiceConfig.getConfig();
-      this.transportProvider.throttle = this.defaultServiceConfig.getRetryThrottling();
+      this.lastServiceConfig = this.defaultServiceConfig;
     } else {
       this.defaultServiceConfig = null;
     }
@@ -631,7 +656,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
       channel = builder.binlog.wrapChannel(channel);
     }
     this.interceptorChannel = ClientInterceptors.intercept(channel, interceptors);
-    this.transportFilters = new ArrayList<>(builder.transportFilters);
     this.stopwatchSupplier = checkNotNull(stopwatchSupplier, "stopwatchSupplier");
     if (builder.idleTimeoutMillis == IDLE_TIMEOUT_MILLIS_DISABLE) {
       this.idleTimeoutMillis = builder.idleTimeoutMillis;
@@ -676,26 +700,73 @@ final class ManagedChannelImpl extends ManagedChannel implements
     }
   }
 
-  @VisibleForTesting
-  static NameResolver getNameResolver(
-      URI targetUri, @Nullable final String overrideAuthority,
-      NameResolverProvider provider, NameResolver.Args nameResolverArgs) {
-    NameResolver resolver = provider.newNameResolver(targetUri, nameResolverArgs);
-    if (resolver == null) {
-      throw new IllegalArgumentException("cannot create a NameResolver for " + targetUri);
+  private static NameResolver getNameResolver(
+      String target, NameResolver.Factory nameResolverFactory, NameResolver.Args nameResolverArgs) {
+    // Finding a NameResolver. Try using the target string as the URI. If that fails, try prepending
+    // "dns:///".
+    URI targetUri = null;
+    StringBuilder uriSyntaxErrors = new StringBuilder();
+    try {
+      targetUri = new URI(target);
+      // For "localhost:8080" this would likely cause newNameResolver to return null, because
+      // "localhost" is parsed as the scheme. Will fall into the next branch and try
+      // "dns:///localhost:8080".
+    } catch (URISyntaxException e) {
+      // Can happen with ip addresses like "[::1]:1234" or 127.0.0.1:1234.
+      uriSyntaxErrors.append(e.getMessage());
+    }
+    if (targetUri != null) {
+      NameResolver resolver = nameResolverFactory.newNameResolver(targetUri, nameResolverArgs);
+      if (resolver != null) {
+        return resolver;
+      }
+      // "foo.googleapis.com:8080" cause resolver to be null, because "foo.googleapis.com" is an
+      // unmapped scheme. Just fall through and will try "dns:///foo.googleapis.com:8080"
     }
 
-    // We wrap the name resolver in a RetryingNameResolver to give it the ability to retry failures.
+    // If we reached here, the targetUri couldn't be used.
+    if (!URI_PATTERN.matcher(target).matches()) {
+      // It doesn't look like a URI target. Maybe it's an authority string. Try with the default
+      // scheme from the factory.
+      try {
+        targetUri = new URI(nameResolverFactory.getDefaultScheme(), "", "/" + target, null);
+      } catch (URISyntaxException e) {
+        // Should not be possible.
+        throw new IllegalArgumentException(e);
+      }
+      NameResolver resolver = nameResolverFactory.newNameResolver(targetUri, nameResolverArgs);
+      if (resolver != null) {
+        return resolver;
+      }
+    }
+    throw new IllegalArgumentException(String.format(
+        "cannot find a NameResolver for %s%s",
+        target, uriSyntaxErrors.length() > 0 ? " (" + uriSyntaxErrors + ")" : ""));
+  }
+
+  @VisibleForTesting
+  static NameResolver getNameResolver(
+      String target, @Nullable final String overrideAuthority,
+      NameResolver.Factory nameResolverFactory, NameResolver.Args nameResolverArgs) {
+    NameResolver resolver = getNameResolver(target, nameResolverFactory, nameResolverArgs);
+    if (overrideAuthority == null) {
+      return resolver;
+    }
+
+    // If the nameResolver is not already a RetryingNameResolver, then wrap it with it.
+    // This helps guarantee that name resolution retry remains supported even as it has been
+    // removed from ManagedChannelImpl.
     // TODO: After a transition period, all NameResolver implementations that need retry should use
     //       RetryingNameResolver directly and this step can be removed.
-    NameResolver usedNameResolver = new RetryingNameResolver(resolver,
+    NameResolver usedNameResolver;
+    if (resolver instanceof RetryingNameResolver) {
+      usedNameResolver = resolver;
+    } else {
+      usedNameResolver = new RetryingNameResolver(resolver,
           new BackoffPolicyRetryScheduler(new ExponentialBackoffPolicy.Provider(),
               nameResolverArgs.getScheduledExecutorService(),
               nameResolverArgs.getSynchronizationContext()),
           nameResolverArgs.getSynchronizationContext());
-
-    if (overrideAuthority == null) {
-      return usedNameResolver;
     }
 
     return new ForwardingNameResolver(usedNameResolver) {
@@ -709,11 +780,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
   @VisibleForTesting
   InternalConfigSelector getConfigSelector() {
     return realChannel.configSelector.get();
-  }
-  
-  @VisibleForTesting
-  boolean hasThrottle() {
-    return this.transportProvider.throttle != null;
   }
 
   /**
@@ -780,16 +846,30 @@ final class ManagedChannelImpl extends ManagedChannel implements
       return;
     }
     panicMode = true;
-    try {
-      cancelIdleTimer(/* permanent= */ true);
-      shutdownNameResolverAndLoadBalancer(false);
-    } finally {
-      updateSubchannelPicker(new LoadBalancer.FixedResultPicker(PickResult.withDrop(
-          Status.INTERNAL.withDescription("Panic! This is a bug!").withCause(t))));
-      realChannel.updateConfigSelector(null);
-      channelLogger.log(ChannelLogLevel.ERROR, "PANIC! Entering TRANSIENT_FAILURE");
-      channelStateManager.gotoState(TRANSIENT_FAILURE);
+    cancelIdleTimer(/* permanent= */ true);
+    shutdownNameResolverAndLoadBalancer(false);
+    final class PanicSubchannelPicker extends SubchannelPicker {
+      private final PickResult panicPickResult =
+          PickResult.withDrop(
+              Status.INTERNAL.withDescription("Panic! This is a bug!").withCause(t));
+
+      @Override
+      public PickResult pickSubchannel(PickSubchannelArgs args) {
+        return panicPickResult;
+      }
+
+      @Override
+      public String toString() {
+        return MoreObjects.toStringHelper(PanicSubchannelPicker.class)
+            .add("panicPickResult", panicPickResult)
+            .toString();
+      }
     }
+
+    updateSubchannelPicker(new PanicSubchannelPicker());
+    realChannel.updateConfigSelector(null);
+    channelLogger.log(ChannelLogLevel.ERROR, "PANIC! Entering TRANSIENT_FAILURE");
+    channelStateManager.gotoState(TRANSIENT_FAILURE);
   }
 
   @VisibleForTesting
@@ -944,15 +1024,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
     // Must run in SynchronizationContext.
     void onConfigError() {
       if (configSelector.get() == INITIAL_PENDING_SELECTOR) {
-        // Apply Default Service Config if initial name resolution fails.
-        if (defaultServiceConfig != null) {
-          updateConfigSelector(defaultServiceConfig.getDefaultConfigSelector());
-          lastServiceConfig = defaultServiceConfig;
-          channelLogger.log(ChannelLogLevel.ERROR,
-              "Initial Name Resolution error, using default service config");
-        } else {
-          updateConfigSelector(null);
-        }
+        updateConfigSelector(null);
       }
     }
 
@@ -1000,7 +1072,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
       final Context context;
       final MethodDescriptor<ReqT, RespT> method;
       final CallOptions callOptions;
-      private final long callCreationTime;
 
       PendingCall(
           Context context, MethodDescriptor<ReqT, RespT> method, CallOptions callOptions) {
@@ -1008,7 +1079,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
         this.context = context;
         this.method = method;
         this.callOptions = callOptions;
-        this.callCreationTime = ticker.nanoTime();
       }
 
       /** Called when it's ready to create a real call and reprocess the pending call. */
@@ -1016,8 +1086,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
         ClientCall<ReqT, RespT> realCall;
         Context previous = context.attach();
         try {
-          CallOptions delayResolutionOption = callOptions.withOption(NAME_RESOLUTION_DELAYED,
-              ticker.nanoTime() - callCreationTime);
+          CallOptions delayResolutionOption = callOptions.withOption(NAME_RESOLUTION_DELAYED, true);
           realCall = newClientCall(method, delayResolutionOption);
         } finally {
           context.detach(previous);
@@ -1114,8 +1183,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
     @SuppressWarnings("unchecked")
     @Override
     public void start(Listener<RespT> observer, Metadata headers) {
-      PickSubchannelArgs args =
-          new PickSubchannelArgsImpl(method, headers, callOptions, NOOP_PICK_DETAILS_CONSUMER);
+      PickSubchannelArgs args = new PickSubchannelArgsImpl(method, headers, callOptions);
       InternalConfigSelector.Result result = configSelector.selectConfig(args);
       Status status = result.getStatus();
       if (!status.isOk()) {
@@ -1391,7 +1459,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
       final class UpdateBalancingState implements Runnable {
         @Override
         public void run() {
-          if (LbHelperImpl.this != lbHelper || panicMode) {
+          if (LbHelperImpl.this != lbHelper) {
             return;
           }
           updateSubchannelPicker(newPicker);
@@ -1471,7 +1539,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
       }
 
       final InternalSubchannel internalSubchannel = new InternalSubchannel(
-          CreateSubchannelArgs.newBuilder().setAddresses(addressGroup).build(),
+          addressGroup,
           authority, userAgent, backoffPolicyProvider, oobTransportFactory,
           oobTransportFactory.getScheduledExecutorService(), stopwatchSupplier, syncContext,
           // All callback methods are run from syncContext
@@ -1480,8 +1548,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
           callTracerFactory.create(),
           subchannelTracer,
           subchannelLogId,
-          subchannelLogger,
-          transportFilters);
+          subchannelLogger);
       oobChannelTracer.reportEvent(new ChannelTrace.Event.Builder()
           .setDescription("Child Subchannel created")
           .setSeverity(ChannelTrace.Event.Severity.CT_INFO)
@@ -1526,7 +1593,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
       checkNotNull(channelCreds, "channelCreds");
 
       final class ResolvingOobChannelBuilder
-          extends ForwardingChannelBuilder2<ResolvingOobChannelBuilder> {
+          extends ForwardingChannelBuilder<ResolvingOobChannelBuilder> {
         final ManagedChannelBuilder<?> delegate;
 
         ResolvingOobChannelBuilder() {
@@ -1558,8 +1625,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
               channelCreds,
               callCredentials,
               transportFactoryBuilder,
-              new FixedPortProvider(nameResolverArgs.getDefaultPort()))
-              .nameResolverRegistry(nameResolverRegistry);
+              new FixedPortProvider(nameResolverArgs.getDefaultPort()));
         }
 
         @Override
@@ -1571,7 +1637,8 @@ final class ManagedChannelImpl extends ManagedChannel implements
       checkState(!terminated, "Channel is terminated");
 
       @SuppressWarnings("deprecation")
-      ResolvingOobChannelBuilder builder = new ResolvingOobChannelBuilder();
+      ResolvingOobChannelBuilder builder = new ResolvingOobChannelBuilder()
+          .nameResolverFactory(nameResolverFactory);
 
       return builder
           // TODO(zdapeng): executors should not outlive the parent channel.
@@ -1609,11 +1676,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
     }
 
     @Override
-    public String getChannelTarget() {
-      return targetUri.toString();
-    }
-
-    @Override
     public SynchronizationContext getSynchronizationContext() {
       return syncContext;
     }
@@ -1636,11 +1698,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
     @Override
     public NameResolverRegistry getNameResolverRegistry() {
       return nameResolverRegistry;
-    }
-
-    @Override
-    public MetricRecorder getMetricRecorder() {
-      return metricRecorder;
     }
 
     /**
@@ -1669,154 +1726,146 @@ final class ManagedChannelImpl extends ManagedChannel implements
     public void onResult(final ResolutionResult resolutionResult) {
       final class NamesResolved implements Runnable {
 
+        @SuppressWarnings("ReferenceEquality")
         @Override
         public void run() {
-          Status status = onResult2(resolutionResult);
+          if (ManagedChannelImpl.this.nameResolver != resolver) {
+            return;
+          }
+
+          List<EquivalentAddressGroup> servers = resolutionResult.getAddresses();
+          channelLogger.log(
+              ChannelLogLevel.DEBUG,
+              "Resolved address: {0}, config={1}",
+              servers,
+              resolutionResult.getAttributes());
+
+          if (lastResolutionState != ResolutionState.SUCCESS) {
+            channelLogger.log(ChannelLogLevel.INFO, "Address resolved: {0}", servers);
+            lastResolutionState = ResolutionState.SUCCESS;
+          }
+
+          ConfigOrError configOrError = resolutionResult.getServiceConfig();
           ResolutionResultListener resolutionResultListener = resolutionResult.getAttributes()
               .get(RetryingNameResolver.RESOLUTION_RESULT_LISTENER_KEY);
-          resolutionResultListener.resolutionAttempted(status);
+          InternalConfigSelector resolvedConfigSelector =
+              resolutionResult.getAttributes().get(InternalConfigSelector.KEY);
+          ManagedChannelServiceConfig validServiceConfig =
+              configOrError != null && configOrError.getConfig() != null
+                  ? (ManagedChannelServiceConfig) configOrError.getConfig()
+                  : null;
+          Status serviceConfigError = configOrError != null ? configOrError.getError() : null;
+
+          ManagedChannelServiceConfig effectiveServiceConfig;
+          if (!lookUpServiceConfig) {
+            if (validServiceConfig != null) {
+              channelLogger.log(
+                  ChannelLogLevel.INFO,
+                  "Service config from name resolver discarded by channel settings");
+            }
+            effectiveServiceConfig =
+                defaultServiceConfig == null ? EMPTY_SERVICE_CONFIG : defaultServiceConfig;
+            if (resolvedConfigSelector != null) {
+              channelLogger.log(
+                  ChannelLogLevel.INFO,
+                  "Config selector from name resolver discarded by channel settings");
+            }
+            realChannel.updateConfigSelector(effectiveServiceConfig.getDefaultConfigSelector());
+          } else {
+            // Try to use config if returned from name resolver
+            // Otherwise, try to use the default config if available
+            if (validServiceConfig != null) {
+              effectiveServiceConfig = validServiceConfig;
+              if (resolvedConfigSelector != null) {
+                realChannel.updateConfigSelector(resolvedConfigSelector);
+                if (effectiveServiceConfig.getDefaultConfigSelector() != null) {
+                  channelLogger.log(
+                      ChannelLogLevel.DEBUG,
+                      "Method configs in service config will be discarded due to presence of"
+                          + "config-selector");
+                }
+              } else {
+                realChannel.updateConfigSelector(effectiveServiceConfig.getDefaultConfigSelector());
+              }
+            } else if (defaultServiceConfig != null) {
+              effectiveServiceConfig = defaultServiceConfig;
+              realChannel.updateConfigSelector(effectiveServiceConfig.getDefaultConfigSelector());
+              channelLogger.log(
+                  ChannelLogLevel.INFO,
+                  "Received no service config, using default service config");
+            } else if (serviceConfigError != null) {
+              if (!serviceConfigUpdated) {
+                // First DNS lookup has invalid service config, and cannot fall back to default
+                channelLogger.log(
+                    ChannelLogLevel.INFO,
+                    "Fallback to error due to invalid first service config without default config");
+                // This error could be an "inappropriate" control plane error that should not bleed
+                // through to client code using gRPC. We let them flow through here to the LB as
+                // we later check for these error codes when investigating pick results in
+                // GrpcUtil.getTransportFromPickResult().
+                onError(configOrError.getError());
+                if (resolutionResultListener != null) {
+                  resolutionResultListener.resolutionAttempted(false);
+                }
+                return;
+              } else {
+                effectiveServiceConfig = lastServiceConfig;
+              }
+            } else {
+              effectiveServiceConfig = EMPTY_SERVICE_CONFIG;
+              realChannel.updateConfigSelector(null);
+            }
+            if (!effectiveServiceConfig.equals(lastServiceConfig)) {
+              channelLogger.log(
+                  ChannelLogLevel.INFO,
+                  "Service config changed{0}",
+                  effectiveServiceConfig == EMPTY_SERVICE_CONFIG ? " to empty" : "");
+              lastServiceConfig = effectiveServiceConfig;
+              transportProvider.throttle = effectiveServiceConfig.getRetryThrottling();
+            }
+
+            try {
+              // TODO(creamsoup): when `servers` is empty and lastResolutionStateCopy == SUCCESS
+              //  and lbNeedAddress, it shouldn't call the handleServiceConfigUpdate. But,
+              //  lbNeedAddress is not deterministic
+              serviceConfigUpdated = true;
+            } catch (RuntimeException re) {
+              logger.log(
+                  Level.WARNING,
+                  "[" + getLogId() + "] Unexpected exception from parsing service config",
+                  re);
+            }
+          }
+
+          Attributes effectiveAttrs = resolutionResult.getAttributes();
+          // Call LB only if it's not shutdown.  If LB is shutdown, lbHelper won't match.
+          if (NameResolverListener.this.helper == ManagedChannelImpl.this.lbHelper) {
+            Attributes.Builder attrBuilder =
+                effectiveAttrs.toBuilder().discard(InternalConfigSelector.KEY);
+            Map<String, ?> healthCheckingConfig =
+                effectiveServiceConfig.getHealthCheckingConfig();
+            if (healthCheckingConfig != null) {
+              attrBuilder
+                  .set(LoadBalancer.ATTR_HEALTH_CHECKING_CONFIG, healthCheckingConfig)
+                  .build();
+            }
+            Attributes attributes = attrBuilder.build();
+
+            boolean lastAddressesAccepted = helper.lb.tryAcceptResolvedAddresses(
+                ResolvedAddresses.newBuilder()
+                    .setAddresses(servers)
+                    .setAttributes(attributes)
+                    .setLoadBalancingPolicyConfig(effectiveServiceConfig.getLoadBalancingConfig())
+                    .build());
+            // If a listener is provided, let it know if the addresses were accepted.
+            if (resolutionResultListener != null) {
+              resolutionResultListener.resolutionAttempted(lastAddressesAccepted);
+            }
+          }
         }
       }
 
       syncContext.execute(new NamesResolved());
-    }
-
-    @SuppressWarnings("ReferenceEquality")
-    @Override
-    public Status onResult2(final ResolutionResult resolutionResult) {
-      syncContext.throwIfNotInThisSynchronizationContext();
-      if (ManagedChannelImpl.this.nameResolver != resolver) {
-        return Status.OK;
-      }
-
-      StatusOr<List<EquivalentAddressGroup>> serversOrError =
-          resolutionResult.getAddressesOrError();
-      if (!serversOrError.hasValue()) {
-        handleErrorInSyncContext(serversOrError.getStatus());
-        return serversOrError.getStatus();
-      }
-      List<EquivalentAddressGroup> servers = serversOrError.getValue();
-      channelLogger.log(
-          ChannelLogLevel.DEBUG,
-          "Resolved address: {0}, config={1}",
-          servers,
-          resolutionResult.getAttributes());
-
-      if (lastResolutionState != ResolutionState.SUCCESS) {
-        channelLogger.log(ChannelLogLevel.INFO, "Address resolved: {0}",
-            servers);
-        lastResolutionState = ResolutionState.SUCCESS;
-      }
-      ConfigOrError configOrError = resolutionResult.getServiceConfig();
-      InternalConfigSelector resolvedConfigSelector =
-          resolutionResult.getAttributes().get(InternalConfigSelector.KEY);
-      ManagedChannelServiceConfig validServiceConfig =
-          configOrError != null && configOrError.getConfig() != null
-              ? (ManagedChannelServiceConfig) configOrError.getConfig()
-              : null;
-      Status serviceConfigError = configOrError != null ? configOrError.getError() : null;
-
-      ManagedChannelServiceConfig effectiveServiceConfig;
-      if (!lookUpServiceConfig) {
-        if (validServiceConfig != null) {
-          channelLogger.log(
-              ChannelLogLevel.INFO,
-              "Service config from name resolver discarded by channel settings");
-        }
-        effectiveServiceConfig =
-            defaultServiceConfig == null ? EMPTY_SERVICE_CONFIG : defaultServiceConfig;
-        if (resolvedConfigSelector != null) {
-          channelLogger.log(
-              ChannelLogLevel.INFO,
-              "Config selector from name resolver discarded by channel settings");
-        }
-        realChannel.updateConfigSelector(effectiveServiceConfig.getDefaultConfigSelector());
-      } else {
-        // Try to use config if returned from name resolver
-        // Otherwise, try to use the default config if available
-        if (validServiceConfig != null) {
-          effectiveServiceConfig = validServiceConfig;
-          if (resolvedConfigSelector != null) {
-            realChannel.updateConfigSelector(resolvedConfigSelector);
-            if (effectiveServiceConfig.getDefaultConfigSelector() != null) {
-              channelLogger.log(
-                  ChannelLogLevel.DEBUG,
-                  "Method configs in service config will be discarded due to presence of"
-                      + "config-selector");
-            }
-          } else {
-            realChannel.updateConfigSelector(effectiveServiceConfig.getDefaultConfigSelector());
-          }
-        } else if (defaultServiceConfig != null) {
-          effectiveServiceConfig = defaultServiceConfig;
-          realChannel.updateConfigSelector(effectiveServiceConfig.getDefaultConfigSelector());
-          channelLogger.log(
-              ChannelLogLevel.INFO,
-              "Received no service config, using default service config");
-        } else if (serviceConfigError != null) {
-          if (!serviceConfigUpdated) {
-            // First DNS lookup has invalid service config, and cannot fall back to default
-            channelLogger.log(
-                ChannelLogLevel.INFO,
-                "Fallback to error due to invalid first service config without default config");
-            // This error could be an "inappropriate" control plane error that should not bleed
-            // through to client code using gRPC. We let them flow through here to the LB as
-            // we later check for these error codes when investigating pick results in
-            // GrpcUtil.getTransportFromPickResult().
-            onError(configOrError.getError());
-            return configOrError.getError();
-          } else {
-            effectiveServiceConfig = lastServiceConfig;
-          }
-        } else {
-          effectiveServiceConfig = EMPTY_SERVICE_CONFIG;
-          realChannel.updateConfigSelector(null);
-        }
-        if (!effectiveServiceConfig.equals(lastServiceConfig)) {
-          channelLogger.log(
-              ChannelLogLevel.INFO,
-              "Service config changed{0}",
-              effectiveServiceConfig == EMPTY_SERVICE_CONFIG ? " to empty" : "");
-          lastServiceConfig = effectiveServiceConfig;
-          transportProvider.throttle = effectiveServiceConfig.getRetryThrottling();
-        }
-
-        try {
-          // TODO(creamsoup): when `serversOrError` is empty and lastResolutionStateCopy == SUCCESS
-          //  and lbNeedAddress, it shouldn't call the handleServiceConfigUpdate. But,
-          //  lbNeedAddress is not deterministic
-          serviceConfigUpdated = true;
-        } catch (RuntimeException re) {
-          logger.log(
-              Level.WARNING,
-              "[" + getLogId() + "] Unexpected exception from parsing service config",
-              re);
-        }
-      }
-
-      Attributes effectiveAttrs = resolutionResult.getAttributes();
-      // Call LB only if it's not shutdown.  If LB is shutdown, lbHelper won't match.
-      if (NameResolverListener.this.helper == ManagedChannelImpl.this.lbHelper) {
-        Attributes.Builder attrBuilder =
-            effectiveAttrs.toBuilder().discard(InternalConfigSelector.KEY);
-        Map<String, ?> healthCheckingConfig =
-            effectiveServiceConfig.getHealthCheckingConfig();
-        if (healthCheckingConfig != null) {
-          attrBuilder
-              .set(LoadBalancer.ATTR_HEALTH_CHECKING_CONFIG, healthCheckingConfig)
-              .build();
-        }
-        Attributes attributes = attrBuilder.build();
-
-        ResolvedAddresses.Builder resolvedAddresses = ResolvedAddresses.newBuilder()
-            .setAddresses(serversOrError.getValue())
-            .setAttributes(attributes)
-            .setLoadBalancingPolicyConfig(effectiveServiceConfig.getLoadBalancingConfig());
-        Status addressAcceptanceStatus = helper.lb.tryAcceptResolvedAddresses(
-            resolvedAddresses.build());
-        return addressAcceptanceStatus;
-      }
-      return Status.OK;
     }
 
     @Override
@@ -1910,7 +1959,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
       }
 
       final InternalSubchannel internalSubchannel = new InternalSubchannel(
-          args,
+          args.getAddresses(),
           authority(),
           userAgent,
           backoffPolicyProvider,
@@ -1923,8 +1972,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
           callTracerFactory.create(),
           subchannelTracer,
           subchannelLogId,
-          subchannelLogger,
-          transportFilters);
+          subchannelLogger);
 
       channelTracer.reportEvent(new ChannelTrace.Event.Builder()
           .setDescription("Child Subchannel started")
@@ -2047,11 +2095,6 @@ final class ManagedChannelImpl extends ManagedChannel implements
       subchannel.updateAddresses(addrs);
     }
 
-    @Override
-    public Attributes getConnectedAddressAttributes() {
-      return subchannel.getConnectedAddressAttributes();
-    }
-
     private List<EquivalentAddressGroup> stripOverrideAuthorityAttributes(
         List<EquivalentAddressGroup> eags) {
       List<EquivalentAddressGroup> eagsWithoutOverrideAttr = new ArrayList<>();
@@ -2088,19 +2131,8 @@ final class ManagedChannelImpl extends ManagedChannel implements
     }
 
     @Override
-    public Attributes filterTransport(Attributes attributes) {
-      return attributes;
-    }
-
-    @Override
     public void transportInUse(final boolean inUse) {
       inUseStateAggregator.updateObjectInUse(delayedTransport, inUse);
-      if (inUse) {
-        // It's possible to be in idle mode while inUseStateAggregator is in-use, if one of the
-        // subchannels is in use. But we should never be in idle mode when delayed transport is in
-        // use.
-        exitIdleMode();
-      }
     }
 
     @Override

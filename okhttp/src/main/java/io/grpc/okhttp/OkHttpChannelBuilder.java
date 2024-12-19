@@ -29,11 +29,11 @@ import io.grpc.ChoiceChannelCredentials;
 import io.grpc.CompositeCallCredentials;
 import io.grpc.CompositeChannelCredentials;
 import io.grpc.ExperimentalApi;
-import io.grpc.ForwardingChannelBuilder2;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.Internal;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.TlsChannelCredentials;
+import io.grpc.internal.AbstractManagedChannelImplBuilder;
 import io.grpc.internal.AtomicBackoff;
 import io.grpc.internal.ClientTransportFactory;
 import io.grpc.internal.ConnectionClientTransport;
@@ -54,15 +54,12 @@ import io.grpc.okhttp.internal.TlsVersion;
 import io.grpc.util.CertificateUtils;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Set;
 import java.util.concurrent.Executor;
@@ -86,7 +83,8 @@ import javax.security.auth.x500.X500Principal;
 
 /** Convenience class for building channels with the OkHttp transport. */
 @ExperimentalApi("https://github.com/grpc/grpc-java/issues/1785")
-public final class OkHttpChannelBuilder extends ForwardingChannelBuilder2<OkHttpChannelBuilder> {
+public final class OkHttpChannelBuilder extends
+    AbstractManagedChannelImplBuilder<OkHttpChannelBuilder> {
   private static final Logger log = Logger.getLogger(OkHttpChannelBuilder.class.getName());
   public static final int DEFAULT_FLOW_CONTROL_WINDOW = 65535;
 
@@ -190,7 +188,6 @@ public final class OkHttpChannelBuilder extends ForwardingChannelBuilder2<OkHttp
   private long keepAliveTimeoutNanos = DEFAULT_KEEPALIVE_TIMEOUT_NANOS;
   private int flowControlWindow = DEFAULT_FLOW_CONTROL_WINDOW;
   private boolean keepAliveWithoutCalls;
-  private int maxInboundMessageSize = GrpcUtil.DEFAULT_MAX_MESSAGE_SIZE;
   private int maxInboundMetadataSize = Integer.MAX_VALUE;
 
   /**
@@ -668,24 +665,21 @@ public final class OkHttpChannelBuilder extends ForwardingChannelBuilder2<OkHttp
 
   static KeyManager[] createKeyManager(byte[] certChain, byte[] privateKey)
       throws GeneralSecurityException {
-    InputStream certChainStream = new ByteArrayInputStream(certChain);
-    InputStream privateKeyStream = new ByteArrayInputStream(privateKey);
+    X509Certificate[] chain;
+    ByteArrayInputStream inCertChain = new ByteArrayInputStream(certChain);
     try {
-      return createKeyManager(certChainStream, privateKeyStream);
+      chain = CertificateUtils.getX509Certificates(inCertChain);
     } finally {
-      GrpcUtil.closeQuietly(certChainStream);
-      GrpcUtil.closeQuietly(privateKeyStream);
+      GrpcUtil.closeQuietly(inCertChain);
     }
-  }
-
-  static KeyManager[] createKeyManager(InputStream certChain, InputStream privateKey)
-      throws GeneralSecurityException {
-    X509Certificate[] chain = CertificateUtils.getX509Certificates(certChain);
     PrivateKey key;
+    ByteArrayInputStream inPrivateKey = new ByteArrayInputStream(privateKey);
     try {
-      key = CertificateUtils.getPrivateKey(privateKey);
+      key = CertificateUtils.getPrivateKey(inPrivateKey);
     } catch (IOException uee) {
       throw new GeneralSecurityException("Unable to decode private key", uee);
+    } finally {
+      GrpcUtil.closeQuietly(inPrivateKey);
     }
     KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
     try {
@@ -703,15 +697,6 @@ public final class OkHttpChannelBuilder extends ForwardingChannelBuilder2<OkHttp
   }
 
   static TrustManager[] createTrustManager(byte[] rootCerts) throws GeneralSecurityException {
-    InputStream rootCertsStream = new ByteArrayInputStream(rootCerts);
-    try {
-      return createTrustManager(rootCertsStream);
-    } finally {
-      GrpcUtil.closeQuietly(rootCertsStream);
-    }
-  }
-
-  static TrustManager[] createTrustManager(InputStream rootCerts) throws GeneralSecurityException {
     KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
     try {
       ks.load(null, null);
@@ -719,7 +704,13 @@ public final class OkHttpChannelBuilder extends ForwardingChannelBuilder2<OkHttp
       // Shouldn't really happen, as we're not loading any data.
       throw new GeneralSecurityException(ex);
     }
-    X509Certificate[] certs = CertificateUtils.getX509Certificates(rootCerts);
+    X509Certificate[] certs;
+    ByteArrayInputStream in = new ByteArrayInputStream(rootCerts);
+    try {
+      certs = CertificateUtils.getX509Certificates(in);
+    } finally {
+      GrpcUtil.closeQuietly(in);
+    }
     for (X509Certificate cert : certs) {
       X500Principal principal = cert.getSubjectX500Principal();
       ks.setCertificateEntry(principal.getName("RFC2253"), cert);
@@ -729,10 +720,6 @@ public final class OkHttpChannelBuilder extends ForwardingChannelBuilder2<OkHttp
         TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
     trustManagerFactory.init(ks);
     return trustManagerFactory.getTrustManagers();
-  }
-
-  static Collection<Class<? extends SocketAddress>> getSupportedSocketAddressTypes() {
-    return Collections.singleton(InetSocketAddress.class);
   }
 
   static final class SslSocketFactoryResult {
@@ -910,11 +897,6 @@ public final class OkHttpChannelBuilder extends ForwardingChannelBuilder2<OkHttp
 
       executorPool.returnObject(executor);
       scheduledExecutorServicePool.returnObject(scheduledExecutorService);
-    }
-
-    @Override
-    public Collection<Class<? extends SocketAddress>> getSupportedSocketAddressTypes() {
-      return OkHttpChannelBuilder.getSupportedSocketAddressTypes();
     }
   }
 }

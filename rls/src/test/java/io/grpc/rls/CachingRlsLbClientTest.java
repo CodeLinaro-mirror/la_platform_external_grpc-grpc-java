@@ -23,15 +23,12 @@ import static com.google.common.truth.Truth.assertWithMessage;
 import static io.grpc.rls.CachingRlsLbClient.RLS_DATA_KEY;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertSame;
-import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import com.google.common.base.Converter;
 import com.google.common.collect.ImmutableList;
@@ -43,21 +40,15 @@ import io.grpc.ChannelCredentials;
 import io.grpc.ChannelLogger;
 import io.grpc.ConnectivityState;
 import io.grpc.EquivalentAddressGroup;
-import io.grpc.ForwardingChannelBuilder2;
+import io.grpc.ForwardingChannelBuilder;
 import io.grpc.LoadBalancer;
 import io.grpc.LoadBalancer.Helper;
-import io.grpc.LoadBalancer.PickDetailsConsumer;
 import io.grpc.LoadBalancer.PickResult;
 import io.grpc.LoadBalancer.SubchannelPicker;
 import io.grpc.LoadBalancerProvider;
-import io.grpc.LongGaugeMetricInstrument;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
-import io.grpc.MetricRecorder;
-import io.grpc.MetricRecorder.BatchCallback;
-import io.grpc.MetricRecorder.BatchRecorder;
-import io.grpc.MetricRecorder.Registration;
 import io.grpc.NameResolver.ConfigOrError;
 import io.grpc.Status;
 import io.grpc.Status.Code;
@@ -102,14 +93,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import javax.annotation.Nonnull;
 import org.junit.After;
-import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.mockito.AdditionalAnswers;
 import org.mockito.ArgumentCaptor;
-import org.mockito.ArgumentMatcher;
-import org.mockito.Captor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
@@ -131,15 +120,6 @@ public class CachingRlsLbClientTest {
   private EvictionListener<RouteLookupRequest, CacheEntry> evictionListener;
   @Mock
   private SocketAddress socketAddress;
-  @Mock
-  private MetricRecorder mockMetricRecorder;
-  @Mock
-  private BatchRecorder mockBatchRecorder;
-  @Mock
-  private Registration mockGaugeRegistration;
-  @Captor
-  private ArgumentCaptor<BatchCallback> gaugeBatchCallbackCaptor;
-
 
   private final SynchronizationContext syncContext =
       new SynchronizationContext(new UncaughtExceptionHandler() {
@@ -161,7 +141,7 @@ public class CachingRlsLbClientTest {
   private final ChildLoadBalancingPolicy childLbPolicy =
       new ChildLoadBalancingPolicy("target", Collections.<String, Object>emptyMap(), lbProvider);
   private final Helper helper =
-      mock(Helper.class, delegatesTo(new FakeHelper()));
+      mock(Helper.class, AdditionalAnswers.delegatesTo(new FakeHelper()));
   private final FakeThrottler fakeThrottler = new FakeThrottler();
   private final LbPolicyConfiguration lbPolicyConfiguration =
       new LbPolicyConfiguration(ROUTE_LOOKUP_CONFIG, null, childLbPolicy);
@@ -182,11 +162,6 @@ public class CachingRlsLbClientTest {
             .setThrottler(fakeThrottler)
             .setTicker(fakeClock.getTicker())
             .build();
-  }
-
-  @Before
-  public void setUpMockMetricRecorder() {
-    when(mockMetricRecorder.registerBatchCallback(any(), any())).thenReturn(mockGaugeRegistration);
   }
 
   @After
@@ -326,7 +301,7 @@ public class CachingRlsLbClientTest {
     fakeClock.forwardTime(10, TimeUnit.MILLISECONDS);
     // initially backed off entry is backed off again
     verify(evictionListener)
-        .onEviction(eq(routeLookupRequest), any(CacheEntry.class), eq(EvictionType.EXPLICIT));
+        .onEviction(eq(routeLookupRequest), any(CacheEntry.class), eq(EvictionType.REPLACED));
 
     resp = getInSyncContext(routeLookupRequest);
 
@@ -379,7 +354,12 @@ public class CachingRlsLbClientTest {
     assertThat(stateCaptor.getAllValues())
         .containsExactly(ConnectivityState.CONNECTING, ConnectivityState.READY);
     Metadata headers = new Metadata();
-    PickResult pickResult = getPickResultForCreate(pickerCaptor, headers);
+    PickResult pickResult = pickerCaptor.getValue().pickSubchannel(
+        new PickSubchannelArgsImpl(
+            TestMethodDescriptors.voidMethod().toBuilder().setFullMethodName("service1/create")
+                .build(),
+            headers,
+            CallOptions.DEFAULT));
     assertThat(pickResult.getStatus().isOk()).isTrue();
     assertThat(pickResult.getSubchannel()).isNotNull();
     assertThat(headers.get(RLS_DATA_KEY)).isEqualTo("header-rls-data-value");
@@ -408,64 +388,11 @@ public class CachingRlsLbClientTest {
                 .setFullMethodName("doesn/exists")
                 .build(),
             headers,
-            CallOptions.DEFAULT,
-            new PickDetailsConsumer() {}));
+            CallOptions.DEFAULT));
     assertThat(pickResult.getStatus().getCode()).isEqualTo(Code.UNAVAILABLE);
     assertThat(pickResult.getStatus().getDescription()).contains("fallback not available");
     assertThat(fakeThrottler.getNumThrottled()).isEqualTo(1);
     assertThat(fakeThrottler.getNumUnthrottled()).isEqualTo(1);
-  }
-
-  @Test
-  public void timeout_not_changing_picked_subchannel() throws Exception {
-    setUpRlsLbClient();
-    RouteLookupRequest routeLookupRequest = RouteLookupRequest.create(ImmutableMap.of(
-        "server", "bigtable.googleapis.com", "service-key", "service1", "method-key", "create"));
-    rlsServerImpl.setLookupTable(
-        ImmutableMap.of(
-            routeLookupRequest,
-            RouteLookupResponse.create(
-                ImmutableList.of("primary.cloudbigtable.googleapis.com", "target2", "target3"),
-                "header-rls-data-value")));
-
-    // valid channel
-    CachedRouteLookupResponse resp = getInSyncContext(routeLookupRequest);
-    assertThat(resp.hasData()).isFalse();
-    fakeClock.forwardTime(SERVER_LATENCY_MILLIS, TimeUnit.MILLISECONDS);
-
-    resp = getInSyncContext(routeLookupRequest);
-    assertThat(resp.hasData()).isTrue();
-
-    ArgumentCaptor<SubchannelPicker> pickerCaptor = ArgumentCaptor.forClass(SubchannelPicker.class);
-    ArgumentCaptor<ConnectivityState> stateCaptor =
-        ArgumentCaptor.forClass(ConnectivityState.class);
-    verify(helper, times(4)).updateBalancingState(stateCaptor.capture(), pickerCaptor.capture());
-
-    Metadata headers = new Metadata();
-    PickResult pickResult = getPickResultForCreate(pickerCaptor, headers);
-    assertThat(pickResult.getStatus().isOk()).isTrue();
-    assertThat(pickResult.getSubchannel().toString())
-        .isEqualTo("primary.cloudbigtable.googleapis.com");
-
-    fakeClock.forwardTime(5, TimeUnit.MINUTES);
-    PickResult pickResult2 = getPickResultForCreate(pickerCaptor, headers);
-    assertThat(pickResult2.getSubchannel()).isNull();
-    fakeClock.forwardTime(SERVER_LATENCY_MILLIS, TimeUnit.MILLISECONDS);
-    PickResult pickResult3 = getPickResultForCreate(pickerCaptor, headers);
-    assertThat(pickResult3.getSubchannel()).isNotNull();
-    assertThat(pickResult3.getSubchannel().toString())
-        .isEqualTo(pickResult.getSubchannel().toString());
-  }
-
-  private static PickResult getPickResultForCreate(ArgumentCaptor<SubchannelPicker> pickerCaptor,
-      Metadata headers) {
-    return pickerCaptor.getValue().pickSubchannel(
-        new PickSubchannelArgsImpl(
-            TestMethodDescriptors.voidMethod().toBuilder().setFullMethodName("service1/create")
-                .build(),
-            headers,
-            CallOptions.DEFAULT,
-            new PickDetailsConsumer() {}));
   }
 
   @Test
@@ -513,7 +440,12 @@ public class CachingRlsLbClientTest {
         .updateBalancingState(stateCaptor.capture(), pickerCaptor.capture());
 
     Metadata headers = new Metadata();
-    PickResult pickResult = getPickResultForCreate(pickerCaptor, headers);
+    PickResult pickResult = pickerCaptor.getValue().pickSubchannel(
+        new PickSubchannelArgsImpl(
+            TestMethodDescriptors.voidMethod().toBuilder().setFullMethodName("service1/create")
+                .build(),
+            headers,
+            CallOptions.DEFAULT));
     assertThat(pickResult.getSubchannel()).isNotNull();
     assertThat(headers.get(RLS_DATA_KEY)).isEqualTo("header-rls-data-value");
 
@@ -548,8 +480,7 @@ public class CachingRlsLbClientTest {
             .setFullMethodName("doesn/exists")
             .build(),
         headers,
-        CallOptions.DEFAULT,
-        new PickDetailsConsumer() {});
+        CallOptions.DEFAULT);
     return invalidArgs;
   }
 
@@ -657,51 +588,6 @@ public class CachingRlsLbClientTest {
     policyWrapper.getHelper().updateBalancingState(newState, policyWrapper.getPicker());
   }
 
-  @Test
-  public void metricGauges() throws ExecutionException, InterruptedException, TimeoutException {
-    setUpRlsLbClient();
-
-    verify(mockMetricRecorder).registerBatchCallback(gaugeBatchCallbackCaptor.capture(),
-        any());
-
-    BatchCallback gaugeBatchCallback = gaugeBatchCallbackCaptor.getValue();
-
-    // Verify the correct cache gauge values when requested at this point.
-    InOrder inOrder = inOrder(mockBatchRecorder);
-    gaugeBatchCallback.accept(mockBatchRecorder);
-    inOrder.verify(mockBatchRecorder).recordLongGauge(
-        argThat(new LongGaugeInstrumentArgumentMatcher("grpc.lb.rls.cache_entries")), eq(0L),
-        any(), any());
-    inOrder.verify(mockBatchRecorder)
-        .recordLongGauge(argThat(new LongGaugeInstrumentArgumentMatcher("grpc.lb.rls.cache_size")),
-            eq(0L), any(), any());
-
-    RouteLookupRequest routeLookupRequest = RouteLookupRequest.create(
-        ImmutableMap.of("server", "bigtable.googleapis.com", "service-key", "foo", "method-key",
-            "bar"));
-    rlsServerImpl.setLookupTable(ImmutableMap.of(routeLookupRequest,
-        RouteLookupResponse.create(ImmutableList.of("target"), "header")));
-
-    // Make a request that will populate the cache with an entry
-    getInSyncContext(routeLookupRequest);
-    fakeClock.forwardTime(SERVER_LATENCY_MILLIS, TimeUnit.MILLISECONDS);
-
-    // Gauge values should reflect the new cache entry.
-    gaugeBatchCallback.accept(mockBatchRecorder);
-    inOrder.verify(mockBatchRecorder).recordLongGauge(
-        argThat(new LongGaugeInstrumentArgumentMatcher("grpc.lb.rls.cache_entries")), eq(1L),
-        any(), any());
-    inOrder.verify(mockBatchRecorder)
-        .recordLongGauge(argThat(new LongGaugeInstrumentArgumentMatcher("grpc.lb.rls.cache_size")),
-            eq(260L), any(), any());
-
-    inOrder.verifyNoMoreInteractions();
-
-    // Shutdown
-    rlsLbClient.close();
-    verify(mockGaugeRegistration).close();
-  }
-
   private static RouteLookupConfig getRouteLookupConfig() {
     return RouteLookupConfig.builder()
         .grpcKeybuilders(ImmutableList.of(
@@ -731,21 +617,6 @@ public class CachingRlsLbClientTest {
             return TimeUnit.NANOSECONDS.convert(delay, unit);
           }
         };
-  }
-
-  private static class LongGaugeInstrumentArgumentMatcher implements
-      ArgumentMatcher<LongGaugeMetricInstrument> {
-
-    private final String instrumentName;
-
-    public LongGaugeInstrumentArgumentMatcher(String instrumentName) {
-      this.instrumentName = instrumentName;
-    }
-
-    @Override
-    public boolean matches(LongGaugeMetricInstrument instrument) {
-      return instrument.getName().equals(instrumentName);
-    }
   }
 
   private static final class FakeBackoffProvider implements BackoffPolicy.Provider {
@@ -791,7 +662,7 @@ public class CachingRlsLbClientTest {
       LoadBalancer loadBalancer = new LoadBalancer() {
 
         @Override
-        public Status acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
+        public boolean acceptResolvedAddresses(ResolvedAddresses resolvedAddresses) {
           Map<?, ?> config = (Map<?, ?>) resolvedAddresses.getLoadBalancingPolicyConfig();
           if (DEFAULT_TARGET.equals(config.get("target"))) {
             helper.updateBalancingState(
@@ -809,13 +680,12 @@ public class CachingRlsLbClientTest {
                 new SubchannelPicker() {
                   @Override
                   public PickResult pickSubchannel(PickSubchannelArgs args) {
-                    return PickResult.withSubchannel(
-                        mock(Subchannel.class, config.get("target").toString()));
+                    return PickResult.withSubchannel(mock(Subchannel.class));
                   }
                 });
           }
 
-          return Status.OK;
+          return true;
         }
 
         @Override
@@ -905,7 +775,7 @@ public class CachingRlsLbClientTest {
       final InProcessChannelBuilder builder =
           InProcessChannelBuilder.forName(target).directExecutor();
 
-      class CleaningChannelBuilder extends ForwardingChannelBuilder2<CleaningChannelBuilder> {
+      class CleaningChannelBuilder extends ForwardingChannelBuilder<CleaningChannelBuilder> {
 
         @Override
         protected ManagedChannelBuilder<?> delegate() {
@@ -975,16 +845,6 @@ public class CachingRlsLbClientTest {
     @Override
     public ChannelLogger getChannelLogger() {
       return mock(ChannelLogger.class);
-    }
-
-    @Override
-    public MetricRecorder getMetricRecorder() {
-      return mockMetricRecorder;
-    }
-
-    @Override
-    public String getChannelTarget() {
-      return "channelTarget";
     }
   }
 

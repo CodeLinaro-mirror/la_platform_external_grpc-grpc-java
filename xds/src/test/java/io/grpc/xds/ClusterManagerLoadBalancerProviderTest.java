@@ -26,7 +26,7 @@ import io.grpc.NameResolver.ConfigOrError;
 import io.grpc.Status;
 import io.grpc.Status.Code;
 import io.grpc.internal.JsonParser;
-import io.grpc.util.GracefulSwitchLoadBalancer;
+import io.grpc.internal.ServiceConfigUtil.PolicySelection;
 import io.grpc.xds.ClusterManagerLoadBalancerProvider.ClusterManagerConfig;
 import java.io.IOException;
 import java.util.Map;
@@ -133,9 +133,10 @@ public class ClusterManagerLoadBalancerProviderTest {
     assertThat(config.childPolicies)
         .containsExactly(
             "child1",
-            GracefulSwitchLoadBalancer.createLoadBalancingPolicyConfig(lbProviderFoo, fooConfig),
+            new PolicySelection(
+                lbProviderFoo, fooConfig),
             "child2",
-            GracefulSwitchLoadBalancer.createLoadBalancingPolicyConfig(lbProviderBar, barConfig));
+            new PolicySelection(lbProviderBar, barConfig));
   }
 
   @Test

@@ -17,7 +17,6 @@
 package io.grpc.internal;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
@@ -26,26 +25,18 @@ import com.google.errorprone.annotations.DoNotCall;
 import io.grpc.Attributes;
 import io.grpc.BinaryLog;
 import io.grpc.CallCredentials;
-import io.grpc.CallOptions;
-import io.grpc.Channel;
 import io.grpc.ChannelCredentials;
-import io.grpc.ClientCall;
 import io.grpc.ClientInterceptor;
-import io.grpc.ClientTransportFilter;
 import io.grpc.CompressorRegistry;
 import io.grpc.DecompressorRegistry;
 import io.grpc.EquivalentAddressGroup;
 import io.grpc.InternalChannelz;
-import io.grpc.InternalConfiguratorRegistry;
+import io.grpc.InternalGlobalInterceptors;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.MethodDescriptor;
-import io.grpc.MetricSink;
 import io.grpc.NameResolver;
-import io.grpc.NameResolverProvider;
 import io.grpc.NameResolverRegistry;
 import io.grpc.ProxyDetector;
-import io.grpc.StatusOr;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.SocketAddress;
@@ -53,7 +44,6 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -62,7 +52,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 
 /**
@@ -115,44 +104,15 @@ public final class ManagedChannelImplBuilder
   private static final long DEFAULT_RETRY_BUFFER_SIZE_IN_BYTES = 1L << 24;  // 16M
   private static final long DEFAULT_PER_RPC_BUFFER_LIMIT_IN_BYTES = 1L << 20; // 1M
 
-  // Matching this pattern means the target string is a URI target or at least intended to be one.
-  // A URI target must be an absolute hierarchical URI.
-  // From RFC 2396: scheme = alpha *( alpha | digit | "+" | "-" | "." )
-  @VisibleForTesting
-  static final Pattern URI_PATTERN = Pattern.compile("[a-zA-Z][a-zA-Z0-9+.-]*:/.*");
-
-  private static final Method GET_CLIENT_INTERCEPTOR_METHOD;
-
-  static {
-    Method getClientInterceptorMethod = null;
-    try {
-      Class<?> censusStatsAccessor =
-          Class.forName("io.grpc.census.InternalCensusStatsAccessor");
-      getClientInterceptorMethod =
-          censusStatsAccessor.getDeclaredMethod(
-              "getClientInterceptor",
-              boolean.class,
-              boolean.class,
-              boolean.class,
-              boolean.class);
-    } catch (ClassNotFoundException e) {
-      // Replace these separate catch statements with multicatch when Android min-API >= 19
-      log.log(Level.FINE, "Unable to apply census stats", e);
-    } catch (NoSuchMethodException e) {
-      log.log(Level.FINE, "Unable to apply census stats", e);
-    }
-    GET_CLIENT_INTERCEPTOR_METHOD = getClientInterceptorMethod;
-  }
-
-
   ObjectPool<? extends Executor> executorPool = DEFAULT_EXECUTOR_POOL;
 
   ObjectPool<? extends Executor> offloadExecutorPool = DEFAULT_EXECUTOR_POOL;
 
   private final List<ClientInterceptor> interceptors = new ArrayList<>();
-  NameResolverRegistry nameResolverRegistry = NameResolverRegistry.getDefaultRegistry();
+  final NameResolverRegistry nameResolverRegistry = NameResolverRegistry.getDefaultRegistry();
 
-  final List<ClientTransportFilter> transportFilters = new ArrayList<>();
+  // Access via getter, which may perform authority override as needed
+  NameResolver.Factory nameResolverFactory = nameResolverRegistry.asFactory();
 
   final String target;
   @Nullable
@@ -205,7 +165,6 @@ public final class ManagedChannelImplBuilder
   private boolean recordRealTimeMetrics = false;
   private boolean recordRetryMetrics = true;
   private boolean tracingEnabled = true;
-  List<MetricSink> metricSinks = new ArrayList<>();
 
   /**
    * An interface for Transport implementors to provide the {@link ClientTransportFactory}
@@ -285,11 +244,11 @@ public final class ManagedChannelImplBuilder
       String target, @Nullable ChannelCredentials channelCreds, @Nullable CallCredentials callCreds,
       ClientTransportFactoryBuilder clientTransportFactoryBuilder,
       @Nullable ChannelBuilderDefaultPortProvider channelBuilderDefaultPortProvider) {
-    this.target = checkNotNull(target, "target");
+    this.target = Preconditions.checkNotNull(target, "target");
     this.channelCredentials = channelCreds;
     this.callCredentials = callCreds;
-    this.clientTransportFactoryBuilder = checkNotNull(clientTransportFactoryBuilder,
-        "clientTransportFactoryBuilder");
+    this.clientTransportFactoryBuilder = Preconditions
+        .checkNotNull(clientTransportFactoryBuilder, "clientTransportFactoryBuilder");
     this.directServerAddress = null;
 
     if (channelBuilderDefaultPortProvider != null) {
@@ -297,13 +256,11 @@ public final class ManagedChannelImplBuilder
     } else {
       this.channelBuilderDefaultPortProvider = new ManagedChannelDefaultPortProvider();
     }
-    // TODO(dnvindhya): Move configurator to all the individual builders
-    InternalConfiguratorRegistry.configureChannelBuilder(this);
   }
 
   /**
    * Returns a target string for the SocketAddress. It is only used as a placeholder, because
-   * DirectAddressNameResolverProvider will not actually try to use it. However, it must be a valid
+   * DirectAddressNameResolverFactory will not actually try to use it. However, it must be a valid
    * URI.
    */
   @VisibleForTesting
@@ -343,21 +300,16 @@ public final class ManagedChannelImplBuilder
     this.target = makeTargetStringForDirectAddress(directServerAddress);
     this.channelCredentials = channelCreds;
     this.callCredentials = callCreds;
-    this.clientTransportFactoryBuilder = checkNotNull(clientTransportFactoryBuilder,
-        "clientTransportFactoryBuilder");
+    this.clientTransportFactoryBuilder = Preconditions
+        .checkNotNull(clientTransportFactoryBuilder, "clientTransportFactoryBuilder");
     this.directServerAddress = directServerAddress;
-    NameResolverRegistry reg = new NameResolverRegistry();
-    reg.register(new DirectAddressNameResolverProvider(directServerAddress,
-        authority));
-    this.nameResolverRegistry = reg;
+    this.nameResolverFactory = new DirectAddressNameResolverFactory(directServerAddress, authority);
 
     if (channelBuilderDefaultPortProvider != null) {
       this.channelBuilderDefaultPortProvider = channelBuilderDefaultPortProvider;
     } else {
       this.channelBuilderDefaultPortProvider = new ManagedChannelDefaultPortProvider();
     }
-    // TODO(dnvindhya): Move configurator to all the individual builders
-    InternalConfiguratorRegistry.configureChannelBuilder(this);
   }
 
   @Override
@@ -396,20 +348,6 @@ public final class ManagedChannelImplBuilder
     return intercept(Arrays.asList(interceptors));
   }
 
-  @Override
-  protected ManagedChannelImplBuilder interceptWithTarget(InterceptorFactory factory) {
-    // Add a placeholder instance to the interceptor list, and replace it with a real instance
-    // during build().
-    this.interceptors.add(new InterceptorFactoryWrapper(factory));
-    return this;
-  }
-
-  @Override
-  public ManagedChannelImplBuilder addTransportFilter(ClientTransportFilter hook) {
-    transportFilters.add(checkNotNull(hook, "transport filter"));
-    return this;
-  }
-
   @Deprecated
   @Override
   public ManagedChannelImplBuilder nameResolverFactory(NameResolver.Factory resolverFactory) {
@@ -417,21 +355,10 @@ public final class ManagedChannelImplBuilder
         "directServerAddress is set (%s), which forbids the use of NameResolverFactory",
         directServerAddress);
     if (resolverFactory != null) {
-      NameResolverRegistry reg = new NameResolverRegistry();
-      if (resolverFactory instanceof NameResolverProvider) {
-        reg.register((NameResolverProvider) resolverFactory);
-      } else {
-        reg.register(new NameResolverFactoryToProviderFacade(resolverFactory));
-      }
-      this.nameResolverRegistry = reg;
+      this.nameResolverFactory = resolverFactory;
     } else {
-      this.nameResolverRegistry = NameResolverRegistry.getDefaultRegistry();
+      this.nameResolverFactory = nameResolverRegistry.asFactory();
     }
-    return this;
-  }
-
-  ManagedChannelImplBuilder nameResolverRegistry(NameResolverRegistry resolverRegistry) {
-    this.nameResolverRegistry = resolverRegistry;
     return this;
   }
 
@@ -442,6 +369,12 @@ public final class ManagedChannelImplBuilder
         directServerAddress);
     Preconditions.checkArgument(policy != null, "policy cannot be null");
     this.defaultLbPolicy = policy;
+    return this;
+  }
+
+  @Override
+  public ManagedChannelImplBuilder enableFullStreamDecompression() {
+    this.fullStreamDecompression = true;
     return this;
   }
 
@@ -688,26 +621,14 @@ public final class ManagedChannelImplBuilder
   }
 
   @Override
-  protected ManagedChannelImplBuilder addMetricSink(MetricSink metricSink) {
-    metricSinks.add(checkNotNull(metricSink, "metric sink"));
-    return this;
-  }
-
-  @Override
   public ManagedChannel build() {
-    ClientTransportFactory clientTransportFactory =
-        clientTransportFactoryBuilder.buildClientTransportFactory();
-    ResolvedNameResolver resolvedResolver = getNameResolverProvider(
-        target, nameResolverRegistry, clientTransportFactory.getSupportedSocketAddressTypes());
     return new ManagedChannelOrphanWrapper(new ManagedChannelImpl(
         this,
-        clientTransportFactory,
-        resolvedResolver.targetUri,
-        resolvedResolver.provider,
+        clientTransportFactoryBuilder.buildClientTransportFactory(),
         new ExponentialBackoffPolicy.Provider(),
         SharedResourcePool.forResource(GrpcUtil.SHARED_CHANNEL_EXECUTOR),
         GrpcUtil.STOPWATCH_SUPPLIER,
-        getEffectiveInterceptors(resolvedResolver.targetUri.toString()),
+        getEffectiveInterceptors(),
         TimeProvider.SYSTEM_TIME_PROVIDER));
   }
 
@@ -715,52 +636,52 @@ public final class ManagedChannelImplBuilder
   // what should be the desired behavior for retry + stats/tracing.
   // TODO(zdapeng): FIX IT
   @VisibleForTesting
-  List<ClientInterceptor> getEffectiveInterceptors(String computedTarget) {
+  List<ClientInterceptor> getEffectiveInterceptors() {
     List<ClientInterceptor> effectiveInterceptors = new ArrayList<>(this.interceptors);
-    for (int i = 0; i < effectiveInterceptors.size(); i++) {
-      if (!(effectiveInterceptors.get(i) instanceof InterceptorFactoryWrapper)) {
-        continue;
-      }
-      InterceptorFactory factory =
-          ((InterceptorFactoryWrapper) effectiveInterceptors.get(i)).factory;
-      ClientInterceptor interceptor = factory.newInterceptor(computedTarget);
-      if (interceptor == null) {
-        throw new NullPointerException("Factory returned null interceptor: " + factory);
-      }
-      effectiveInterceptors.set(i, interceptor);
+    boolean isGlobalInterceptorsSet = false;
+    List<ClientInterceptor> globalClientInterceptors =
+        InternalGlobalInterceptors.getClientInterceptors();
+    if (globalClientInterceptors != null) {
+      effectiveInterceptors.addAll(globalClientInterceptors);
+      isGlobalInterceptorsSet = true;
     }
-
-    boolean disableImplicitCensus = InternalConfiguratorRegistry.wasSetConfiguratorsCalled();
-    if (disableImplicitCensus) {
-      return effectiveInterceptors;
-    }
-    if (statsEnabled) {
+    if (!isGlobalInterceptorsSet && statsEnabled) {
       ClientInterceptor statsInterceptor = null;
-
-      if (GET_CLIENT_INTERCEPTOR_METHOD != null) {
-        try {
-          statsInterceptor =
-            (ClientInterceptor) GET_CLIENT_INTERCEPTOR_METHOD
-              .invoke(
-                null,
-                recordStartedRpcs,
-                recordFinishedRpcs,
-                recordRealTimeMetrics,
-                recordRetryMetrics);
-        } catch (IllegalAccessException e) {
-          log.log(Level.FINE, "Unable to apply census stats", e);
-        } catch (InvocationTargetException e) {
-          log.log(Level.FINE, "Unable to apply census stats", e);
-        }
+      try {
+        Class<?> censusStatsAccessor =
+            Class.forName("io.grpc.census.InternalCensusStatsAccessor");
+        Method getClientInterceptorMethod =
+            censusStatsAccessor.getDeclaredMethod(
+                "getClientInterceptor",
+                boolean.class,
+                boolean.class,
+                boolean.class,
+                boolean.class);
+        statsInterceptor =
+            (ClientInterceptor) getClientInterceptorMethod
+                .invoke(
+                    null,
+                    recordStartedRpcs,
+                    recordFinishedRpcs,
+                    recordRealTimeMetrics,
+                    recordRetryMetrics);
+      } catch (ClassNotFoundException e) {
+        // Replace these separate catch statements with multicatch when Android min-API >= 19
+        log.log(Level.FINE, "Unable to apply census stats", e);
+      } catch (NoSuchMethodException e) {
+        log.log(Level.FINE, "Unable to apply census stats", e);
+      } catch (IllegalAccessException e) {
+        log.log(Level.FINE, "Unable to apply census stats", e);
+      } catch (InvocationTargetException e) {
+        log.log(Level.FINE, "Unable to apply census stats", e);
       }
-
       if (statsInterceptor != null) {
         // First interceptor runs last (see ClientInterceptors.intercept()), so that no
         // other interceptor can override the tracer factory we set in CallOptions.
         effectiveInterceptors.add(0, statsInterceptor);
       }
     }
-    if (tracingEnabled) {
+    if (!isGlobalInterceptorsSet && tracingEnabled) {
       ClientInterceptor tracingInterceptor = null;
       try {
         Class<?> censusTracingAccessor =
@@ -793,79 +714,13 @@ public final class ManagedChannelImplBuilder
     return channelBuilderDefaultPortProvider.getDefaultPort();
   }
 
-  @VisibleForTesting
-  static class ResolvedNameResolver {
-    public final URI targetUri;
-    public final NameResolverProvider provider;
-
-    public ResolvedNameResolver(URI targetUri, NameResolverProvider provider) {
-      this.targetUri = checkNotNull(targetUri, "targetUri");
-      this.provider = checkNotNull(provider, "provider");
-    }
-  }
-
-  @VisibleForTesting
-  static ResolvedNameResolver getNameResolverProvider(
-      String target, NameResolverRegistry nameResolverRegistry,
-      Collection<Class<? extends SocketAddress>> channelTransportSocketAddressTypes) {
-    // Finding a NameResolver. Try using the target string as the URI. If that fails, try prepending
-    // "dns:///".
-    NameResolverProvider provider = null;
-    URI targetUri = null;
-    StringBuilder uriSyntaxErrors = new StringBuilder();
-    try {
-      targetUri = new URI(target);
-    } catch (URISyntaxException e) {
-      // Can happen with ip addresses like "[::1]:1234" or 127.0.0.1:1234.
-      uriSyntaxErrors.append(e.getMessage());
-    }
-    if (targetUri != null) {
-      // For "localhost:8080" this would likely cause provider to be null, because "localhost" is
-      // parsed as the scheme. Will hit the next case and try "dns:///localhost:8080".
-      provider = nameResolverRegistry.getProviderForScheme(targetUri.getScheme());
-    }
-
-    if (provider == null && !URI_PATTERN.matcher(target).matches()) {
-      // It doesn't look like a URI target. Maybe it's an authority string. Try with the default
-      // scheme from the registry.
-      try {
-        targetUri = new URI(nameResolverRegistry.getDefaultScheme(), "", "/" + target, null);
-      } catch (URISyntaxException e) {
-        // Should not be possible.
-        throw new IllegalArgumentException(e);
-      }
-      provider = nameResolverRegistry.getProviderForScheme(targetUri.getScheme());
-    }
-
-    if (provider == null) {
-      throw new IllegalArgumentException(String.format(
-          "Could not find a NameResolverProvider for %s%s",
-          target, uriSyntaxErrors.length() > 0 ? " (" + uriSyntaxErrors + ")" : ""));
-    }
-
-    if (channelTransportSocketAddressTypes != null) {
-      Collection<Class<? extends SocketAddress>> nameResolverSocketAddressTypes
-          = provider.getProducedSocketAddressTypes();
-      if (!channelTransportSocketAddressTypes.containsAll(nameResolverSocketAddressTypes)) {
-        throw new IllegalArgumentException(String.format(
-            "Address types of NameResolver '%s' for '%s' not supported by transport",
-            targetUri.getScheme(), target));
-      }
-    }
-
-    return new ResolvedNameResolver(targetUri, provider);
-  }
-
-  private static class DirectAddressNameResolverProvider extends NameResolverProvider {
+  private static class DirectAddressNameResolverFactory extends NameResolver.Factory {
     final SocketAddress address;
     final String authority;
-    final Collection<Class<? extends SocketAddress>> producedSocketAddressTypes;
 
-    DirectAddressNameResolverProvider(SocketAddress address, String authority) {
+    DirectAddressNameResolverFactory(SocketAddress address, String authority) {
       this.address = address;
       this.authority = authority;
-      this.producedSocketAddressTypes
-          = Collections.singleton(address.getClass());
     }
 
     @Override
@@ -878,11 +733,9 @@ public final class ManagedChannelImplBuilder
 
         @Override
         public void start(Listener2 listener) {
-          listener.onResult2(
+          listener.onResult(
               ResolutionResult.newBuilder()
-                  .setAddressesOrError(
-                      StatusOr.fromValue(
-                          Collections.singletonList(new EquivalentAddressGroup(address))))
+                  .setAddresses(Collections.singletonList(new EquivalentAddressGroup(address)))
                   .setAttributes(Attributes.EMPTY)
                   .build());
         }
@@ -895,35 +748,6 @@ public final class ManagedChannelImplBuilder
     @Override
     public String getDefaultScheme() {
       return DIRECT_ADDRESS_SCHEME;
-    }
-
-    @Override
-    protected boolean isAvailable() {
-      return true;
-    }
-
-    @Override
-    protected int priority() {
-      return 5;
-    }
-
-    @Override
-    public Collection<Class<? extends SocketAddress>> getProducedSocketAddressTypes() {
-      return producedSocketAddressTypes;
-    }
-  }
-
-  private static final class InterceptorFactoryWrapper implements ClientInterceptor {
-    final InterceptorFactory factory;
-
-    public InterceptorFactoryWrapper(InterceptorFactory factory) {
-      this.factory = checkNotNull(factory, "factory");
-    }
-
-    @Override
-    public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
-        MethodDescriptor<ReqT, RespT> method, CallOptions callOptions, Channel next) {
-      throw new AssertionError("Should have been replaced with real instance");
     }
   }
 

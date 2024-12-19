@@ -15,7 +15,7 @@ android {
     namespace 'io.grpc.cronet'
     compileSdkVersion 33
     defaultConfig {
-        minSdkVersion 21
+        minSdkVersion 19
         targetSdkVersion 33
         versionCode 1
         versionName "1.0"
@@ -43,9 +43,8 @@ android {
 }
 
 dependencies {
-    api project(':grpc-api'),
+    api project(':grpc-core'),
             libraries.cronet.api
-    implementation project(':grpc-core')
     implementation libraries.guava
     testImplementation project(':grpc-testing')
 
@@ -53,7 +52,10 @@ dependencies {
 
     testImplementation libraries.junit
     testImplementation libraries.mockito.core
-    testImplementation libraries.robolectric
+    testImplementation (libraries.robolectric) {
+        // Unreleased change: https://github.com/robolectric/robolectric/pull/5432
+        exclude group: 'com.google.auto.service', module: 'auto-service'
+    }
 }
 
 task javadocs(type: Javadoc) {

@@ -16,23 +16,22 @@
 
 package io.grpc.android.integrationtest;
 
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.Assert.assertEquals;
 
 import android.net.LocalSocketAddress.Namespace;
 import androidx.test.InstrumentationRegistry;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.rule.ActivityTestRule;
-import io.grpc.Grpc;
-import io.grpc.InsecureServerCredentials;
+import com.google.common.util.concurrent.SettableFuture;
 import io.grpc.Server;
 import io.grpc.android.UdsChannelBuilder;
+import io.grpc.android.integrationtest.InteropTask.Listener;
+import io.grpc.netty.NettyServerBuilder;
 import io.grpc.testing.integration.TestServiceImpl;
 import java.io.IOException;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -54,8 +53,7 @@ public class UdsChannelInteropTest {
   private Server server;
   private UdsTcpEndpointConnector endpointConnector;
 
-  private ScheduledExecutorService serverExecutor = Executors.newScheduledThreadPool(2);
-  private ExecutorService testExecutor = Executors.newSingleThreadExecutor();
+  private ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
 
   // Ensures Looper is initialized for tests running on API level 15. Otherwise instantiating an
   // AsyncTask throws an exception.
@@ -69,9 +67,9 @@ public class UdsChannelInteropTest {
 
     // Start local server.
     server =
-        Grpc.newServerBuilderForPort(0, InsecureServerCredentials.create())
+        NettyServerBuilder.forPort(0)
             .maxInboundMessageSize(16 * 1024 * 1024)
-            .addService(new TestServiceImpl(serverExecutor))
+            .addService(new TestServiceImpl(executor))
             .build();
     server.start();
 
@@ -114,16 +112,23 @@ public class UdsChannelInteropTest {
   }
 
   private void runTest(String testCase) throws Exception {
-    String result = null;
-    try {
-      result = testExecutor.submit(new TestCallable(
-              UdsChannelBuilder.forPath(UDS_PATH, Namespace.ABSTRACT)
-                      .maxInboundMessageSize(16 * 1024 * 1024)
-                      .build(),
-              testCase)).get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-      assertEquals(testCase + " failed", TestCallable.SUCCESS_MESSAGE, result);
-    } catch (ExecutionException | InterruptedException e) {
-      result = e.getMessage();
-    }
+    final SettableFuture<String> resultFuture = SettableFuture.create();
+    InteropTask.Listener listener =
+        new Listener() {
+          @Override
+          public void onComplete(String result) {
+            resultFuture.set(result);
+          }
+        };
+
+    new InteropTask(
+            listener,
+            UdsChannelBuilder.forPath(UDS_PATH, Namespace.ABSTRACT)
+                .maxInboundMessageSize(16 * 1024 * 1024)
+                .build(),
+            testCase)
+        .execute();
+    String result = resultFuture.get(TIMEOUT_SECONDS, SECONDS);
+    assertEquals(testCase + " failed", InteropTask.SUCCESS_MESSAGE, result);
   }
 }

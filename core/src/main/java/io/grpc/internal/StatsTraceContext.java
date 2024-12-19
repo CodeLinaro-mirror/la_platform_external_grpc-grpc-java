@@ -101,9 +101,9 @@ public final class StatsTraceContext {
    *
    * <p>Called from abstract stream implementations.
    */
-  public void clientInboundHeaders(Metadata headers) {
+  public void clientInboundHeaders() {
     for (StreamTracer tracer : tracers) {
-      ((ClientStreamTracer) tracer).inboundHeaders(headers);
+      ((ClientStreamTracer) tracer).inboundHeaders();
     }
   }
 

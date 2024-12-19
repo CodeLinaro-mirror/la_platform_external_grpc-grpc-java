@@ -38,4 +38,7 @@ final class FailingCallCredentials extends CallCredentials {
       CallCredentials.MetadataApplier applier) {
     applier.fail(status);
   }
+
+  @Override
+  public void thisUsesUnstableApi() {}
 }

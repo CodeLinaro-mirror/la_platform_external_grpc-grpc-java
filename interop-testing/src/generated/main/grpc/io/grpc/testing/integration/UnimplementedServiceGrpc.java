@@ -16,7 +16,7 @@ public final class UnimplementedServiceGrpc {
 
   private UnimplementedServiceGrpc() {}
 
-  public static final java.lang.String SERVICE_NAME = "grpc.testing.UnimplementedService";
+  public static final String SERVICE_NAME = "grpc.testing.UnimplementedService";
 
   // Static method descriptors that strictly reflect the proto.
   private static volatile io.grpc.MethodDescriptor<io.grpc.testing.integration.EmptyProtos.Empty,
@@ -297,9 +297,9 @@ public final class UnimplementedServiceGrpc {
   private static final class UnimplementedServiceMethodDescriptorSupplier
       extends UnimplementedServiceBaseDescriptorSupplier
       implements io.grpc.protobuf.ProtoMethodDescriptorSupplier {
-    private final java.lang.String methodName;
+    private final String methodName;
 
-    UnimplementedServiceMethodDescriptorSupplier(java.lang.String methodName) {
+    UnimplementedServiceMethodDescriptorSupplier(String methodName) {
       this.methodName = methodName;
     }
 

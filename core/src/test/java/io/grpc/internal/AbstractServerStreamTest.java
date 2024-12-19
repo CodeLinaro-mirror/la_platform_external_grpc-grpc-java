@@ -18,7 +18,6 @@ package io.grpc.internal;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
 import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -85,7 +84,7 @@ public class AbstractServerStreamTest {
   }
 
   /**
-   * Test for issue https://github.com/grpc/grpc-java/issues/1795 .
+   * Test for issue https://github.com/grpc/grpc-java/issues/1795
    */
   @Test
   public void frameShouldBeIgnoredAfterDeframerClosed() {
@@ -212,7 +211,7 @@ public class AbstractServerStreamTest {
   }
 
   /**
-   * Test for issue https://github.com/grpc/grpc-java/issues/615 .
+   * Test for issue https://github.com/grpc/grpc-java/issues/615
    */
   @Test
   public void completeWithoutClose() {
@@ -286,28 +285,28 @@ public class AbstractServerStreamTest {
   public void writeHeaders_failsOnNullHeaders() {
     thrown.expect(NullPointerException.class);
 
-    stream.writeHeaders(null, true);
+    stream.writeHeaders(null);
   }
 
   @Test
   public void writeHeaders() {
     Metadata headers = new Metadata();
-    stream.writeHeaders(headers, true);
-    verify(sink).writeHeaders(same(headers), eq(true));
+    stream.writeHeaders(headers);
+    verify(sink).writeHeaders(same(headers));
   }
 
   @Test
   public void writeMessage_dontWriteDuplicateHeaders() {
-    stream.writeHeaders(new Metadata(), true);
+    stream.writeHeaders(new Metadata());
     stream.writeMessage(new ByteArrayInputStream(new byte[]{}));
 
     // Make sure it wasn't called twice
-    verify(sink).writeHeaders(any(Metadata.class), eq(true));
+    verify(sink).writeHeaders(any(Metadata.class));
   }
 
   @Test
   public void writeMessage_ignoreIfFramerClosed() {
-    stream.writeHeaders(new Metadata(), true);
+    stream.writeHeaders(new Metadata());
     stream.endOfMessages();
     reset(sink);
 
@@ -318,7 +317,7 @@ public class AbstractServerStreamTest {
 
   @Test
   public void writeMessage() {
-    stream.writeHeaders(new Metadata(), true);
+    stream.writeHeaders(new Metadata());
 
     stream.writeMessage(new ByteArrayInputStream(new byte[]{}));
     stream.flush();
@@ -328,7 +327,7 @@ public class AbstractServerStreamTest {
 
   @Test
   public void writeMessage_closesStream() throws Exception {
-    stream.writeHeaders(new Metadata(), true);
+    stream.writeHeaders(new Metadata());
     InputStream input = mock(InputStream.class, delegatesTo(new ByteArrayInputStream(new byte[1])));
     stream.writeMessage(input);
     verify(input).close();
@@ -370,15 +369,6 @@ public class AbstractServerStreamTest {
     assertEquals(
         Status.Code.INTERNAL, metadataCaptor.getValue().get(InternalStatus.CODE_KEY).getCode());
     assertEquals("bad", metadataCaptor.getValue().get(InternalStatus.MESSAGE_KEY));
-  }
-
-  @Test
-  public void changeOnReadyThreshold() {
-    stream.setListener(new ServerStreamListenerBase());
-    stream.transportState().onStreamAllocated();
-    stream.setOnReadyThreshold(Integer.MAX_VALUE);
-    stream.onSendingBytes(Integer.MAX_VALUE - 1);
-    assertTrue(stream.isReady());
   }
 
   private static class ServerStreamListenerBase implements ServerStreamListener {

@@ -47,9 +47,9 @@ import io.grpc.Grpc;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.MethodDescriptor.MethodType;
-import io.grpc.NoopClientCall;
 import io.grpc.Status;
 import io.grpc.gcp.observability.interceptors.ConfigFilterHelper.FilterParams;
+import io.grpc.internal.NoopClientCall;
 import io.grpc.observabilitylog.v1.GrpcLogRecord;
 import io.grpc.observabilitylog.v1.GrpcLogRecord.EventLogger;
 import io.grpc.observabilitylog.v1.GrpcLogRecord.EventType;
@@ -58,6 +58,7 @@ import io.opencensus.trace.SpanId;
 import io.opencensus.trace.TraceId;
 import io.opencensus.trace.TraceOptions;
 import io.opencensus.trace.Tracestate;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.charset.Charset;
@@ -103,8 +104,7 @@ public class InternalLoggingChannelInterceptorTest {
   private AtomicReference<Object> actualRequest;
   private SettableFuture<Void> halfCloseCalled;
   private SettableFuture<Void> cancelCalled;
-  @SuppressWarnings("AddressSelection") // It will only be one address
-  private SocketAddress peer = new InetSocketAddress("127.0.0.1", 1234);
+  private SocketAddress peer;
   private LogHelper mockLogHelper;
   private ConfigFilterHelper mockFilterHelper;
   private FilterParams filterParams;
@@ -119,6 +119,7 @@ public class InternalLoggingChannelInterceptorTest {
     actualRequest = new AtomicReference<>();
     halfCloseCalled = SettableFuture.create();
     cancelCalled = SettableFuture.create();
+    peer = new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 1234);
     filterParams = FilterParams.create(true, 0, 0);
   }
 

@@ -92,6 +92,7 @@ public final class BindServiceFlagsTest {
                 | Context.BIND_NOT_FOREGROUND
                 | Context.BIND_NOT_PERCEPTIBLE
                 | Context.BIND_WAIVE_PRIORITY
-                | Context.BIND_ALLOW_ACTIVITY_STARTS);
+                // TODO(b/274061424): Use Context.BIND_ALLOW_ACTIVITY_STARTS when U is final.
+                | 0x200);
   }
 }

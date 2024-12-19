@@ -28,11 +28,11 @@ import javax.annotation.concurrent.ThreadSafe;
 @ThreadSafe
 public abstract class ClientStreamTracer extends StreamTracer {
   /**
-   * Indicates how long the call was delayed, in nanoseconds, due to waiting for name resolution
-   * result. If the call option is not set, the call did not experience name resolution delay.
+   * The call was delayed due to waiting for name resolution result.
    */
-  public static final CallOptions.Key<Long> NAME_RESOLUTION_DELAYED =
-      CallOptions.Key.create("io.grpc.ClientStreamTracer.NAME_RESOLUTION_DELAYED");
+  public static final CallOptions.Key<Boolean> NAME_RESOLUTION_DELAYED =
+      CallOptions.Key.createWithDefault("io.grpc.ClientStreamTracer.NAME_RESOLUTION_DELAYED",
+          false);
 
   /**
    * The stream is being created on a ready transport.
@@ -70,33 +70,13 @@ public abstract class ClientStreamTracer extends StreamTracer {
   }
 
   /**
-   * Headers has been received from the server. This method does not pass ownership to {@code
-   * headers}, so implementations must not access the metadata after returning. Modifications to the
-   * metadata within this method will be seen by interceptors and the application.
+   * Trailing metadata has been received from the server.
    *
-   * @param headers the received header metadata
-   */
-  public void inboundHeaders(Metadata headers) {
-    inboundHeaders();
-  }
-
-  /**
-   * Trailing metadata has been received from the server. This method does not pass ownership to
-   * {@code trailers}, so implementations must not access the metadata after returning.
-   * Modifications to the metadata within this method will be seen by interceptors and the
-   * application.
-   *
-   * @param trailers the received trailing metadata
+   * @param trailers the mutable trailing metadata.  Modifications to it will be seen by
+   *                 interceptors and the application.
    * @since 1.17.0
    */
   public void inboundTrailers(Metadata trailers) {
-  }
-
-  /**
-   * Information providing context to the call became available.
-   */
-  @Internal
-  public void addOptionalLabel(String key, String value) {
   }
 
   /**

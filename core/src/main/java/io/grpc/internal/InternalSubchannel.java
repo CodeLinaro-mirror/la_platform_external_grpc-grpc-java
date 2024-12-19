@@ -35,7 +35,6 @@ import io.grpc.CallOptions;
 import io.grpc.ChannelLogger;
 import io.grpc.ChannelLogger.ChannelLogLevel;
 import io.grpc.ClientStreamTracer;
-import io.grpc.ClientTransportFilter;
 import io.grpc.ConnectivityState;
 import io.grpc.ConnectivityStateInfo;
 import io.grpc.EquivalentAddressGroup;
@@ -45,7 +44,6 @@ import io.grpc.InternalChannelz.ChannelStats;
 import io.grpc.InternalInstrumented;
 import io.grpc.InternalLogId;
 import io.grpc.InternalWithLogId;
-import io.grpc.LoadBalancer;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.Status;
@@ -78,9 +76,6 @@ final class InternalSubchannel implements InternalInstrumented<ChannelStats>, Tr
   private final CallTracer callsTracer;
   private final ChannelTracer channelTracer;
   private final ChannelLogger channelLogger;
-  private final boolean reconnectDisabled;
-
-  private final List<ClientTransportFilter> transportFilters;
 
   /**
    * All field must be mutated in the syncContext.
@@ -159,17 +154,12 @@ final class InternalSubchannel implements InternalInstrumented<ChannelStats>, Tr
 
   private Status shutdownReason;
 
-  private volatile Attributes connectedAddressAttributes;
-
-  InternalSubchannel(LoadBalancer.CreateSubchannelArgs args, String authority, String userAgent,
-                     BackoffPolicy.Provider backoffPolicyProvider,
-                     ClientTransportFactory transportFactory,
-                     ScheduledExecutorService scheduledExecutor,
-                     Supplier<Stopwatch> stopwatchSupplier, SynchronizationContext syncContext,
-                     Callback callback, InternalChannelz channelz, CallTracer callsTracer,
-                     ChannelTracer channelTracer, InternalLogId logId,
-                     ChannelLogger channelLogger, List<ClientTransportFilter> transportFilters) {
-    List<EquivalentAddressGroup> addressGroups = args.getAddresses();
+  InternalSubchannel(List<EquivalentAddressGroup> addressGroups, String authority, String userAgent,
+      BackoffPolicy.Provider backoffPolicyProvider,
+      ClientTransportFactory transportFactory, ScheduledExecutorService scheduledExecutor,
+      Supplier<Stopwatch> stopwatchSupplier, SynchronizationContext syncContext, Callback callback,
+      InternalChannelz channelz, CallTracer callsTracer, ChannelTracer channelTracer,
+      InternalLogId logId, ChannelLogger channelLogger) {
     Preconditions.checkNotNull(addressGroups, "addressGroups");
     Preconditions.checkArgument(!addressGroups.isEmpty(), "addressGroups is empty");
     checkListHasNoNulls(addressGroups, "addressGroups contains null entry");
@@ -190,8 +180,6 @@ final class InternalSubchannel implements InternalInstrumented<ChannelStats>, Tr
     this.channelTracer = Preconditions.checkNotNull(channelTracer, "channelTracer");
     this.logId = Preconditions.checkNotNull(logId, "logId");
     this.channelLogger = Preconditions.checkNotNull(channelLogger, "channelLogger");
-    this.transportFilters = transportFilters;
-    this.reconnectDisabled = args.getOption(LoadBalancer.DISABLE_SUBCHANNEL_RECONNECT_KEY);
   }
 
   ChannelLogger getChannelLogger() {
@@ -294,11 +282,6 @@ final class InternalSubchannel implements InternalInstrumented<ChannelStats>, Tr
     }
 
     gotoState(ConnectivityStateInfo.forTransientFailure(status));
-
-    if (reconnectDisabled) {
-      return;
-    }
-
     if (reconnectPolicy == null) {
       reconnectPolicy = backoffPolicyProvider.get();
     }
@@ -347,11 +330,7 @@ final class InternalSubchannel implements InternalInstrumented<ChannelStats>, Tr
     if (state.getState() != newState.getState()) {
       Preconditions.checkState(state.getState() != SHUTDOWN,
           "Cannot transition out of SHUTDOWN to " + newState);
-      if (reconnectDisabled && newState.getState() == TRANSIENT_FAILURE) {
-        state = ConnectivityStateInfo.forNonError(IDLE);
-      } else {
-        state = newState;
-      }
+      state = newState;
       callback.onStateChange(InternalSubchannel.this, newState);
     }
   }
@@ -541,13 +520,6 @@ final class InternalSubchannel implements InternalInstrumented<ChannelStats>, Tr
     return channelStatsFuture;
   }
 
-  /**
-   * Return attributes for server address connected by sub channel.
-   */
-  public Attributes getConnectedAddressAttributes() {
-    return connectedAddressAttributes;
-  }
-
   ConnectivityState getState() {
     return state.getState();
   }
@@ -568,15 +540,6 @@ final class InternalSubchannel implements InternalInstrumented<ChannelStats>, Tr
     }
 
     @Override
-    public Attributes filterTransport(Attributes attributes) {
-      for (ClientTransportFilter filter : transportFilters) {
-        attributes = Preconditions.checkNotNull(filter.transportReady(attributes),
-            "Filter %s returned null", filter);
-      }
-      return attributes;
-    }
-
-    @Override
     public void transportReady() {
       channelLogger.log(ChannelLogLevel.INFO, "READY");
       syncContext.execute(new Runnable() {
@@ -591,7 +554,6 @@ final class InternalSubchannel implements InternalInstrumented<ChannelStats>, Tr
           } else if (pendingTransport == transport) {
             activeTransport = transport;
             pendingTransport = null;
-            connectedAddressAttributes = addressIndex.getCurrentEagAttributes();
             gotoNonErrorState(READY);
           }
         }
@@ -645,9 +607,6 @@ final class InternalSubchannel implements InternalInstrumented<ChannelStats>, Tr
       channelLogger.log(ChannelLogLevel.INFO, "{0} Terminated", transport.getLogId());
       channelz.removeClientSocket(transport);
       handleTransportInUseState(transport, false);
-      for (ClientTransportFilter filter : transportFilters) {
-        filter.transportTerminated(transport.getAttributes());
-      }
       syncContext.execute(new Runnable() {
         @Override
         public void run() {

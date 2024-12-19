@@ -1,5 +1,3 @@
-load("@rules_jvm_external//:defs.bzl", "artifact")
-
 java_library(
     name = "core",
     visibility = ["//visibility:public"],
@@ -8,8 +6,19 @@ java_library(
 
 java_library(
     name = "inprocess",
+    srcs = glob([
+        "src/main/java/io/grpc/inprocess/*.java",
+    ]),
     visibility = ["//visibility:public"],
-    exports = ["//inprocess"],
+    deps = [
+        ":internal",
+        "//api",
+        "//context",
+        "@com_google_code_findbugs_jsr305//jar",
+        "@com_google_errorprone_error_prone_annotations//jar",
+        "@com_google_guava_guava//jar",
+        "@com_google_j2objc_j2objc_annotations//jar",
+    ],
 )
 
 java_library(
@@ -25,20 +34,34 @@ java_library(
     deps = [
         "//api",
         "//context",
-        artifact("com.google.code.gson:gson"),
-        artifact("com.google.android:annotations"),
-        artifact("com.google.code.findbugs:jsr305"),
-        artifact("com.google.errorprone:error_prone_annotations"),
-        artifact("com.google.guava:guava"),
-        artifact("io.perfmark:perfmark-api"),
-        artifact("org.codehaus.mojo:animal-sniffer-annotations"),
+        "@com_google_android_annotations//jar",
+        "@com_google_code_findbugs_jsr305//jar",
+        "@com_google_code_gson_gson//jar",
+        "@com_google_errorprone_error_prone_annotations//jar",
+        "@com_google_guava_guava//jar",
+        "@com_google_j2objc_j2objc_annotations//jar",
+        "@io_perfmark_perfmark_api//jar",
+        "@org_codehaus_mojo_animal_sniffer_annotations//jar",
     ],
 )
 
 java_library(
     name = "util",
+    srcs = glob([
+        "src/main/java/io/grpc/util/*.java",
+    ]),
+    resources = glob([
+        "src/bazel-util/resources/**",
+    ]),
     visibility = ["//visibility:public"],
-    exports = ["//util"],
+    deps = [
+        ":internal",
+        "//api",
+        "@com_google_code_findbugs_jsr305//jar",
+        "@com_google_guava_guava//jar",
+        "@com_google_j2objc_j2objc_annotations//jar",
+        "@org_codehaus_mojo_animal_sniffer_annotations//jar",
+    ],
 )
 
 # Mirrors the dependencies included in the artifact on Maven Central for usage
@@ -48,8 +71,9 @@ java_library(
     name = "core_maven",
     visibility = ["//visibility:public"],
     exports = [
+        ":inprocess",
         ":internal",
+        ":util",
         "//api",
-        "//util",
     ],
 )

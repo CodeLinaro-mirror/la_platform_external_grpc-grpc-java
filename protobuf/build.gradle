@@ -9,12 +9,6 @@ plugins {
 
 description = 'gRPC: Protobuf'
 
-tasks.named("jar").configure {
-    manifest {
-        attributes('Automatic-Module-Name': 'io.grpc.protobuf')
-    }
-}
-
 dependencies {
     api project(':grpc-api'),
             libraries.jsr305,
@@ -27,7 +21,7 @@ dependencies {
         exclude group: 'com.google.api', module: 'api-common'
     }
 
-    implementation (project(':grpc-protobuf-lite')) {
+    api (project(':grpc-protobuf-lite')) {
         exclude group: 'com.google.protobuf', module: 'protobuf-javalite'
     }
 
@@ -36,6 +30,5 @@ dependencies {
 }
 
 tasks.named("javadoc").configure {
-    options.linksOffline 'https://protobuf.dev/reference/java/api-docs/',
-        "${rootProject.projectDir}/gradle/javadoc/protobuf.dev-reference-java-api-docs/"
+    options.links 'https://protobuf.dev/reference/java/api-docs/'
 }

@@ -17,7 +17,7 @@
 package io.grpc.cronet;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -71,12 +71,15 @@ public final class CronetClientTransportTest {
   private MethodDescriptor<Void, Void> descriptor = TestMethodDescriptors.voidMethod();
   @Mock private ManagedClientTransport.Listener clientTransportListener;
   @Mock private BidirectionalStream.Builder builder;
-  private final Executor executor = Runnable::run;
+  private final Executor executor = new Executor() {
+      @Override
+      public void execute(Runnable r) {
+        r.run();
+      }
+    };
 
   @Before
   public void setUp() {
-    when(clientTransportListener.filterTransport(any()))
-        .thenAnswer(i -> i.getArgument(0, Attributes.class));
     transport =
         new CronetClientTransport(
             streamFactory,
@@ -91,7 +94,7 @@ public final class CronetClientTransportTest {
             false,
             false);
     Runnable callback = transport.start(clientTransportListener);
-    assertNotNull(callback);
+    assertTrue(callback != null);
     callback.run();
     verify(clientTransportListener).transportReady();
   }

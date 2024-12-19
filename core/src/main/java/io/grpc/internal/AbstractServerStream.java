@@ -41,7 +41,7 @@ public abstract class AbstractServerStream extends AbstractStream
      *
      * @param headers the headers to be sent to client.
      */
-    void writeHeaders(Metadata headers, boolean flush);
+    void writeHeaders(Metadata headers);
 
     /**
      * Sends an outbound frame to the remote end point.
@@ -96,11 +96,11 @@ public abstract class AbstractServerStream extends AbstractStream
   }
 
   @Override
-  public final void writeHeaders(Metadata headers, boolean flush) {
+  public final void writeHeaders(Metadata headers) {
     Preconditions.checkNotNull(headers, "headers");
 
     headersSent = true;
-    abstractServerStreamSink().writeHeaders(headers, flush);
+    abstractServerStreamSink().writeHeaders(headers);
   }
 
   @Override
@@ -178,19 +178,6 @@ public abstract class AbstractServerStream extends AbstractStream
   }
 
   /**
-   * A hint to the stream that specifies how many bytes must be queued before
-   * {@link #isReady()} will return false. A stream may ignore this property
-   * if unsupported. This may only be set before any messages are sent.
-   *
-   * @param numBytes The number of bytes that must be queued. Must be a
-   *                 positive integer.
-   */
-  @Override
-  public void setOnReadyThreshold(int numBytes) {
-    super.setOnReadyThreshold(numBytes);
-  }
-
-  /**
    * This should only be called from the transport thread (except for private interactions with
    * {@code AbstractServerStream}).
    */
@@ -256,8 +243,6 @@ public abstract class AbstractServerStream extends AbstractStream
       }
     }
 
-
-
     @Override
     protected ServerStreamListener listener() {
       return listener;
@@ -293,7 +278,6 @@ public abstract class AbstractServerStream extends AbstractStream
      */
     public final void transportReportStatus(final Status status) {
       Preconditions.checkArgument(!status.isOk(), "status must not be OK");
-      onStreamDeallocated();
       if (deframerClosed) {
         deframerClosedTask = null;
         closeListener(status);
@@ -316,7 +300,6 @@ public abstract class AbstractServerStream extends AbstractStream
      * #transportReportStatus}.
      */
     public void complete() {
-      onStreamDeallocated();
       if (deframerClosed) {
         deframerClosedTask = null;
         closeListener(Status.OK);
@@ -352,6 +335,7 @@ public abstract class AbstractServerStream extends AbstractStream
           getTransportTracer().reportStreamClosed(closedStatus.isOk());
         }
         listenerClosed = true;
+        onStreamDeallocated();
         listener().closed(newStatus);
       }
     }

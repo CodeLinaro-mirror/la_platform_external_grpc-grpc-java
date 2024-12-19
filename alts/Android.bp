@@ -24,7 +24,7 @@ java_library_host {
         "grpc-java-stub",
         "guava",
         "javax_annotation-api_1.3.2",
-        "netty-unshaded-1.69.0",
+        "netty-unshaded-1.56.0",
     ],
     proto: {
         type: "full",

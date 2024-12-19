@@ -23,9 +23,8 @@ import io.envoyproxy.envoy.config.core.v3.Node;
 import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.CertificateValidationContext;
 import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.CommonTlsContext;
 import io.grpc.Internal;
+import io.grpc.xds.Bootstrapper.CertificateProviderInfo;
 import io.grpc.xds.EnvoyServerProtoData.UpstreamTlsContext;
-import io.grpc.xds.client.Bootstrapper.CertificateProviderInfo;
-import io.grpc.xds.internal.security.CommonTlsContextUtil;
 import io.grpc.xds.internal.security.SslContextProvider;
 import java.util.Map;
 import javax.annotation.Nullable;
@@ -65,17 +64,13 @@ public final class CertProviderClientSslContextProviderFactory {
         = CertProviderSslContextProvider.getRootCertProviderInstance(commonTlsContext);
     CommonTlsContext.CertificateProviderInstance certInstance
         = CertProviderSslContextProvider.getCertProviderInstance(commonTlsContext);
-    if (CommonTlsContextUtil.hasCertProviderInstance(upstreamTlsContext.getCommonTlsContext())
-        || CommonTlsContextUtil.isUsingSystemRootCerts(upstreamTlsContext.getCommonTlsContext())) {
-      return new CertProviderClientSslContextProvider(
-          node,
-          certProviders,
-          certInstance,
-          rootCertInstance,
-          staticCertValidationContext,
-          upstreamTlsContext,
-          certificateProviderStore);
-    }
-    throw new UnsupportedOperationException("Unsupported configurations in UpstreamTlsContext!");
+    return new CertProviderClientSslContextProvider(
+        node,
+        certProviders,
+        certInstance,
+        rootCertInstance,
+        staticCertValidationContext,
+        upstreamTlsContext,
+        certificateProviderStore);
   }
 }

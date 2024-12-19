@@ -31,7 +31,6 @@ import io.grpc.InternalConfigSelector;
 import io.grpc.LoadBalancer.PickSubchannelArgs;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
-import io.grpc.NoopClientCall;
 import io.grpc.Status;
 import io.grpc.internal.ManagedChannelImpl.ConfigSelectingClientCall;
 import io.grpc.internal.ManagedChannelServiceConfig.MethodInfo;

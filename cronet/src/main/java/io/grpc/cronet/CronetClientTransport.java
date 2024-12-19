@@ -56,15 +56,14 @@ class CronetClientTransport implements ConnectionClientTransport {
   private final Object lock = new Object();
   @GuardedBy("lock")
   private final Set<CronetClientStream> streams = Collections.newSetFromMap(
-          new IdentityHashMap<>());
+          new IdentityHashMap<CronetClientStream, Boolean>());
   private final Executor executor;
   private final int maxMessageSize;
   private final boolean alwaysUsePut;
   private final TransportTracer transportTracer;
-  private Attributes attrs;
+  private final Attributes attrs;
   private final boolean useGetForSafeMethods;
   private final boolean usePutForIdempotentMethods;
-  private final StreamBuilderFactory streamFactory;
   // Indicates the transport is in go-away state: no new streams will be processed,
   // but existing streams may continue.
   @GuardedBy("lock")
@@ -80,6 +79,7 @@ class CronetClientTransport implements ConnectionClientTransport {
   @GuardedBy("lock")
   // Whether this transport has started.
   private boolean started;
+  private StreamBuilderFactory streamFactory;
 
   CronetClientTransport(
       StreamBuilderFactory streamFactory,
@@ -169,7 +169,6 @@ class CronetClientTransport implements ConnectionClientTransport {
     return new Runnable() {
       @Override
       public void run() {
-        attrs = CronetClientTransport.this.listener.filterTransport(attrs);
         // Listener callbacks should not be called simultaneously
         CronetClientTransport.this.listener.transportReady();
       }
@@ -205,9 +204,9 @@ class CronetClientTransport implements ConnectionClientTransport {
       // streams.remove()
       streamsCopy = new ArrayList<>(streams);
     }
-    for (CronetClientStream cronetClientStream : streamsCopy) {
+    for (int i = 0; i < streamsCopy.size(); i++) {
       // Avoid deadlock by calling into stream without lock held
-      cronetClientStream.cancel(status);
+      streamsCopy.get(i).cancel(status);
     }
     stopIfNecessary();
   }
@@ -255,7 +254,7 @@ class CronetClientTransport implements ConnectionClientTransport {
    */
   void stopIfNecessary() {
     synchronized (lock) {
-      if (goAway && !stopped && streams.isEmpty()) {
+      if (goAway && !stopped && streams.size() == 0) {
         stopped = true;
       } else {
         return;

@@ -266,13 +266,6 @@ public class UndertowTransportTest extends AbstractTransportTest {
   @Test
   public void flowControlPushBack() {}
 
-  // FIXME
-  @Override
-  @Ignore("Servlet flow control not implemented yet")
-  @Test
-  public void flowControlDoesNotDeadlockLargeMessage() {
-  }
-
   @Override
   @Ignore("Server side sockets are managed by the servlet container")
   @Test

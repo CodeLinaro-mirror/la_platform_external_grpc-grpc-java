@@ -2,18 +2,16 @@ plugins {
     id "java-library"
     id "maven-publish"
 
+    id "com.github.johnrengelman.shadow"
     id "com.google.protobuf"
-    id "com.gradleup.shadow"
     id "ru.vyarus.animalsniffer"
 }
 
 description = "gRPC: ALTS"
 
 dependencies {
-    api project(':grpc-api')
+    api project(':grpc-core')
     implementation project(':grpc-auth'),
-            project(':grpc-core'),
-            project(":grpc-context"), // Override google-auth dependency with our newer version
             project(':grpc-grpclb'),
             project(':grpc-protobuf'),
             project(':grpc-stub'),
@@ -29,14 +27,15 @@ dependencies {
 
     testImplementation project(':grpc-testing'),
             testFixtures(project(':grpc-core')),
-            project(':grpc-inprocess'),
             project(':grpc-testing-proto'),
             libraries.guava,
             libraries.junit,
             libraries.mockito.core,
             libraries.truth
 
-    testImplementation libraries.guava.testlib
+    testImplementation (libraries.guava.testlib) {
+        exclude group: 'junit', module: 'junit'
+    }
     testRuntimeOnly libraries.netty.tcnative,
             libraries.netty.tcnative.classes
     testRuntimeOnly (libraries.netty.transport.epoll) {
@@ -52,6 +51,10 @@ configureProtoCompilation()
 import net.ltgt.gradle.errorprone.CheckSeverity
 
 [tasks.named("compileJava"), tasks.named("compileTestJava")]*.configure {
+    // protobuf calls valueof. Will be fixed in next release (google/protobuf#4046)
+    options.compilerArgs += [
+        "-Xlint:-deprecation"
+    ]
     // ALTS returns a lot of futures that we mostly don't care about.
     options.errorprone.check("FutureReturnValueIgnored", CheckSeverity.OFF)
 }
@@ -64,9 +67,6 @@ tasks.named("javadoc").configure {
 tasks.named("jar").configure {
     // Must use a different archiveClassifier to avoid conflicting with shadowJar
     archiveClassifier = 'original'
-    manifest {
-        attributes('Automatic-Module-Name': 'io.grpc.alts')
-    }
 }
 
 // We want to use grpc-netty-shaded instead of grpc-netty. But we also want our

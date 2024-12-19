@@ -56,7 +56,6 @@ import io.grpc.ClientInterceptor;
 import io.grpc.ClientInterceptors;
 import io.grpc.ClientStreamTracer;
 import io.grpc.Context;
-import io.grpc.KnownLength;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.ServerCall;
@@ -100,7 +99,6 @@ import io.opencensus.trace.SpanContext;
 import io.opencensus.trace.Tracer;
 import io.opencensus.trace.propagation.BinaryFormat;
 import io.opencensus.trace.propagation.SpanContextParseException;
-import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashSet;
 import java.util.List;
@@ -136,9 +134,9 @@ public class CensusModulesTest {
       CallOptions.DEFAULT.withOption(CUSTOM_OPTION, "customvalue");
   private static final ClientStreamTracer.StreamInfo STREAM_INFO =
       ClientStreamTracer.StreamInfo.newBuilder()
-          .setCallOptions(CallOptions.DEFAULT.withOption(NAME_RESOLUTION_DELAYED, 10L)).build();
+          .setCallOptions(CallOptions.DEFAULT.withOption(NAME_RESOLUTION_DELAYED, true)).build();
 
-  private static class StringInputStream extends InputStream implements KnownLength {
+  private static class StringInputStream extends InputStream {
     final String string;
 
     StringInputStream(String string) {
@@ -150,11 +148,6 @@ public class CensusModulesTest {
       // InProcessTransport doesn't actually read bytes from the InputStream.  The InputStream is
       // passed to the InProcess server and consumed by MARSHALLER.parse().
       throw new UnsupportedOperationException("Should not be called");
-    }
-
-    @Override
-    public int available() throws IOException {
-      return string == null ? 0 : string.length();
     }
   }
 

@@ -35,7 +35,7 @@ public final class GoogleDefaultChannelBuilder
   }
 
   /** "Overrides" the static method in {@link ManagedChannelBuilder}. */
-  public static GoogleDefaultChannelBuilder forTarget(String target) {
+  public static final GoogleDefaultChannelBuilder forTarget(String target) {
     return new GoogleDefaultChannelBuilder(target);
   }
 
@@ -45,7 +45,6 @@ public final class GoogleDefaultChannelBuilder
   }
 
   @Override
-  @SuppressWarnings("deprecation") // Not extending ForwardingChannelBuilder2 to preserve ABI.
   protected NettyChannelBuilder delegate() {
     return delegate;
   }

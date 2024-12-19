@@ -22,7 +22,6 @@ import com.google.auto.value.AutoValue;
 import com.google.re2j.Pattern;
 import java.math.BigInteger;
 import java.net.InetAddress;
-import java.util.Locale;
 import javax.annotation.Nullable;
 
 /**
@@ -274,11 +273,11 @@ public final class Matchers {
             : exact().equals(args);
       } else if (prefix() != null) {
         return ignoreCase()
-            ? args.toLowerCase(Locale.ROOT).startsWith(prefix().toLowerCase(Locale.ROOT))
+            ? args.toLowerCase().startsWith(prefix().toLowerCase())
             : args.startsWith(prefix());
       } else if (suffix() != null) {
         return ignoreCase()
-            ? args.toLowerCase(Locale.ROOT).endsWith(suffix().toLowerCase(Locale.ROOT))
+            ? args.toLowerCase().endsWith(suffix().toLowerCase())
             : args.endsWith(suffix());
       } else if (contains() != null) {
         return args.contains(contains());

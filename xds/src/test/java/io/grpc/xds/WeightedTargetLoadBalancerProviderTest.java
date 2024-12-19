@@ -26,7 +26,7 @@ import io.grpc.LoadBalancerProvider;
 import io.grpc.LoadBalancerRegistry;
 import io.grpc.NameResolver.ConfigOrError;
 import io.grpc.internal.JsonParser;
-import io.grpc.util.GracefulSwitchLoadBalancer;
+import io.grpc.internal.ServiceConfigUtil.PolicySelection;
 import io.grpc.xds.WeightedTargetLoadBalancerProvider.WeightedPolicySelection;
 import io.grpc.xds.WeightedTargetLoadBalancerProvider.WeightedTargetConfig;
 import java.util.Map;
@@ -128,13 +128,11 @@ public class WeightedTargetLoadBalancerProviderTest {
             "target_1",
             new WeightedPolicySelection(
                 10,
-                GracefulSwitchLoadBalancer.createLoadBalancingPolicyConfig(
-                    lbProviderFoo, fooConfig)),
+                new PolicySelection(lbProviderFoo, fooConfig)),
             "target_2",
             new WeightedPolicySelection(
                 20,
-                GracefulSwitchLoadBalancer.createLoadBalancingPolicyConfig(
-                    lbProviderBar, barConfig)))));
+                new PolicySelection(lbProviderBar, barConfig)))));
     assertThat(parsedConfig).isEqualTo(expectedConfig);
   }
 }

@@ -36,12 +36,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class TesterActivity extends AppCompatActivity
-    implements ProviderInstaller.ProviderInstallListener {
+    implements ProviderInstaller.ProviderInstallListener, InteropTask.Listener {
   private static final String LOG_TAG = "GrpcTesterActivity";
 
   private List<Button> buttons;
@@ -53,8 +50,6 @@ public class TesterActivity extends AppCompatActivity
   private CheckBox testCertCheckBox;
 
   private UdsTcpEndpointConnector endpointConnector;
-
-  private ExecutorService executor;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
@@ -77,8 +72,6 @@ public class TesterActivity extends AppCompatActivity
     ProviderInstaller.installIfNeededAsync(this, this);
     // Disable buttons until the security provider installing finishes.
     enableButtons(false);
-
-    executor = Executors.newSingleThreadExecutor();
   }
 
   /** Click handler for unix domain socket. */
@@ -115,6 +108,16 @@ public class TesterActivity extends AppCompatActivity
     for (Button button : buttons) {
       button.setEnabled(enable);
     }
+  }
+
+  @Override
+  public void onComplete(String result) {
+    if (endpointConnector != null) {
+      endpointConnector.shutDown();
+      endpointConnector = null;
+    }
+    resultText.setText(result);
+    enableButtons(true);
   }
 
   private void startTest(String testCase) {
@@ -159,19 +162,7 @@ public class TesterActivity extends AppCompatActivity
     }
 
     // Start Test.
-    String result = null;
-    try {
-      result = executor.submit(new TestCallable(channel, testCase)).get();
-    } catch (ExecutionException | InterruptedException e) {
-      result = e.getMessage();
-    } finally {
-      if (endpointConnector != null) {
-        endpointConnector.shutDown();
-        endpointConnector = null;
-      }
-      resultText.setText(result);
-      enableButtons(true);
-    }
+    new InteropTask(TesterActivity.this, channel, testCase).execute();
   }
 
   @Override

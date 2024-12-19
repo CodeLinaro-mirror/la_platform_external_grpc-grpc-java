@@ -16,8 +16,8 @@
 
 package io.grpc.internal;
 
+import static com.google.common.base.Charsets.UTF_8;
 import static io.grpc.internal.GrpcUtil.CONTENT_LENGTH_KEY;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -47,6 +47,7 @@ import io.grpc.SecurityLevel;
 import io.grpc.ServerCall;
 import io.grpc.Status;
 import io.grpc.internal.ServerCallImpl.ServerStreamListenerImpl;
+import io.grpc.internal.SingleMessageProducer;
 import io.perfmark.PerfMark;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -148,18 +149,12 @@ public class ServerCallImplTest {
   }
 
   @Test
-  public void setOnReadyThreshold() {
-    call.setOnReadyThreshold(10);
-    verify(stream).setOnReadyThreshold(10);
-  }
-
-  @Test
   public void sendHeader_firstCall() {
     Metadata headers = new Metadata();
 
     call.sendHeaders(headers);
 
-    verify(stream).writeHeaders(headers, false);
+    verify(stream).writeHeaders(headers);
   }
 
   @Test
@@ -168,7 +163,7 @@ public class ServerCallImplTest {
     headers.put(CONTENT_LENGTH_KEY, "123");
     call.sendHeaders(headers);
 
-    verify(stream).writeHeaders(headers, false);
+    verify(stream).writeHeaders(headers);
     assertNull(headers.get(CONTENT_LENGTH_KEY));
   }
 
@@ -225,7 +220,7 @@ public class ServerCallImplTest {
 
     call.sendMessage(1234L);
 
-    verify(stream).cancel(isA(Status.class));
+    verify(stream).close(isA(Status.class), isA(Metadata.class));
   }
 
   @Test

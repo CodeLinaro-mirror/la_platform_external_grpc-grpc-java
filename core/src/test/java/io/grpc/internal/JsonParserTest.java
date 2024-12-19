@@ -123,11 +123,4 @@ public class JsonParserTest {
 
     assertEquals(expected, JsonParser.parse("{\"hi\": 2}"));
   }
-
-  @Test
-  public void duplicate() throws IOException {
-    thrown.expect(IllegalArgumentException.class);
-
-    JsonParser.parse("{\"hi\": 2, \"hi\": 3}");
-  }
 }

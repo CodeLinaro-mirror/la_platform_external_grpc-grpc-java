@@ -35,7 +35,6 @@ import com.google.protobuf.Value;
 import com.google.protobuf.util.Durations;
 import io.envoyproxy.envoy.config.core.v3.Node;
 import io.envoyproxy.envoy.config.endpoint.v3.ClusterStats;
-import io.envoyproxy.envoy.config.endpoint.v3.EndpointLoadMetricStats;
 import io.envoyproxy.envoy.config.endpoint.v3.UpstreamLocalityStats;
 import io.envoyproxy.envoy.service.load_stats.v3.LoadReportingServiceGrpc;
 import io.envoyproxy.envoy.service.load_stats.v3.LoadStatsRequest;
@@ -51,12 +50,8 @@ import io.grpc.internal.BackoffPolicy;
 import io.grpc.internal.FakeClock;
 import io.grpc.stub.StreamObserver;
 import io.grpc.testing.GrpcCleanupRule;
-import io.grpc.xds.client.EnvoyProtoData;
-import io.grpc.xds.client.LoadReportClient;
-import io.grpc.xds.client.LoadStatsManager2;
-import io.grpc.xds.client.LoadStatsManager2.ClusterDropStats;
-import io.grpc.xds.client.LoadStatsManager2.ClusterLocalityStats;
-import io.grpc.xds.client.Locality;
+import io.grpc.xds.LoadStatsManager2.ClusterDropStats;
+import io.grpc.xds.LoadStatsManager2.ClusterLocalityStats;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -96,7 +91,7 @@ public class LoadReportClientTest {
         @Override
         public boolean shouldAccept(Runnable command) {
           return command.toString()
-              .contains("LoadReportingTask");
+              .contains(LoadReportClient.LoadReportingTask.class.getSimpleName());
         }
       };
   private static final FakeClock.TaskFilter LRS_RPC_RETRY_TASK_FILTER =
@@ -104,7 +99,7 @@ public class LoadReportClientTest {
         @Override
         public boolean shouldAccept(Runnable command) {
           return command.toString()
-              .contains("LrsRpcRetryTask");
+              .contains(LoadReportClient.LrsRpcRetryTask.class.getSimpleName());
         }
       };
 
@@ -178,9 +173,7 @@ public class LoadReportClientTest {
     when(backoffPolicy2.nextBackoffNanos())
         .thenReturn(TimeUnit.SECONDS.toNanos(2L), TimeUnit.SECONDS.toNanos(20L));
     addFakeStatsData();
-    lrsClient = new LoadReportClient(loadStatsManager,
-        GrpcXdsTransportFactory.DEFAULT_XDS_TRANSPORT_FACTORY.createForTest(channel),
-        NODE,
+    lrsClient = new LoadReportClient(loadStatsManager, channel, Context.ROOT, NODE,
         syncContext, fakeClock.getScheduledExecutorService(), backoffPolicyProvider,
         fakeClock.getStopwatchSupplier());
     syncContext.execute(new Runnable() {
@@ -205,15 +198,11 @@ public class LoadReportClientTest {
     for (int i = 0; i < 31; i++) {
       localityStats1.recordCallStarted();
     }
-    localityStats1.recordBackendLoadMetricStats(ImmutableMap.of("named1", 3.14159));
-    localityStats1.recordBackendLoadMetricStats(ImmutableMap.of("named1", 1.618));
-    localityStats1.recordBackendLoadMetricStats(ImmutableMap.of("named1", -2.718));
     ClusterLocalityStats localityStats2 =
         loadStatsManager.getClusterLocalityStats(CLUSTER2, EDS_SERVICE_NAME2, LOCALITY2);
     for (int i = 0; i < 45; i++) {
       localityStats2.recordCallStarted();
     }
-    localityStats2.recordBackendLoadMetricStats(ImmutableMap.of("named2", 1.414));
     localityStats2.recordCallFinished(Status.OK);
   }
 
@@ -256,12 +245,6 @@ public class LoadReportClientTest {
     assertThat(localityStats.getTotalSuccessfulRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalErrorRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalRequestsInProgress()).isEqualTo(31L);
-    assertThat(localityStats.getLoadMetricStatsCount()).isEqualTo(1);
-    EndpointLoadMetricStats loadMetricStats = Iterables.getOnlyElement(
-        localityStats.getLoadMetricStatsList());
-    assertThat(loadMetricStats.getMetricName()).isEqualTo("named1");
-    assertThat(loadMetricStats.getNumRequestsFinishedWithMetric()).isEqualTo(3L);
-    assertThat(loadMetricStats.getTotalMetricValue()).isEqualTo(3.14159 + 1.618 - 2.718);
 
     fakeClock.forwardTime(10L, TimeUnit.SECONDS);
     verify(requestObserver, times(3)).onNext(requestCaptor.capture());
@@ -280,7 +263,6 @@ public class LoadReportClientTest {
     assertThat(localityStats.getTotalSuccessfulRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalErrorRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalRequestsInProgress()).isEqualTo(31L);
-    assertThat(localityStats.getLoadMetricStatsList()).isEmpty();
 
     // Management server updates the interval of sending load reports, while still asking for
     // loads to cluster1 only.
@@ -305,7 +287,6 @@ public class LoadReportClientTest {
     assertThat(localityStats.getTotalSuccessfulRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalErrorRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalRequestsInProgress()).isEqualTo(31L);
-    assertThat(localityStats.getLoadMetricStatsList()).isEmpty();
 
     // Management server asks to report loads for all clusters.
     responseObserver.onNext(LoadStatsResponse.newBuilder().setSendAllClusters(true)
@@ -328,7 +309,6 @@ public class LoadReportClientTest {
     assertThat(localityStats1.getTotalSuccessfulRequests()).isEqualTo(0L);
     assertThat(localityStats1.getTotalErrorRequests()).isEqualTo(0L);
     assertThat(localityStats1.getTotalRequestsInProgress()).isEqualTo(31L);
-    assertThat(localityStats1.getLoadMetricStatsList()).isEmpty();
     ClusterStats clusterStats2 = findClusterStats(request.getClusterStatsList(), CLUSTER2);
     assertThat(Durations.toSeconds(clusterStats2.getLoadReportInterval()))
         .isEqualTo(10L + 10L + 20L + 20L);
@@ -346,12 +326,6 @@ public class LoadReportClientTest {
     assertThat(localityStats2.getTotalSuccessfulRequests()).isEqualTo(1L);
     assertThat(localityStats2.getTotalErrorRequests()).isEqualTo(0L);
     assertThat(localityStats2.getTotalRequestsInProgress()).isEqualTo(45L - 1L);
-    assertThat(localityStats2.getLoadMetricStatsCount()).isEqualTo(1);
-    EndpointLoadMetricStats loadMetricStats2 = Iterables.getOnlyElement(
-        localityStats2.getLoadMetricStatsList());
-    assertThat(loadMetricStats2.getMetricName()).isEqualTo("named2");
-    assertThat(loadMetricStats2.getNumRequestsFinishedWithMetric()).isEqualTo(1L);
-    assertThat(loadMetricStats2.getTotalMetricValue()).isEqualTo(1.414);
 
     // Load reports for cluster1 is no longer wanted.
     responseObserver.onNext(LoadStatsResponse.newBuilder().addClusters(CLUSTER2)
@@ -374,7 +348,6 @@ public class LoadReportClientTest {
     assertThat(localityStats.getTotalSuccessfulRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalErrorRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalRequestsInProgress()).isEqualTo(44L);
-    assertThat(localityStats.getLoadMetricStatsList()).isEmpty();
 
     fakeClock.forwardTime(10L, TimeUnit.SECONDS);
     verify(requestObserver, times(7)).onNext(requestCaptor.capture());
@@ -393,7 +366,6 @@ public class LoadReportClientTest {
     assertThat(localityStats.getTotalSuccessfulRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalErrorRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalRequestsInProgress()).isEqualTo(44L);
-    assertThat(localityStats.getLoadMetricStatsList()).isEmpty();
 
     // Management server asks loads for a cluster that client has no load data.
     responseObserver.onNext(LoadStatsResponse.newBuilder().addClusters("unknown.googleapis.com")
@@ -523,12 +495,6 @@ public class LoadReportClientTest {
     assertThat(localityStats.getTotalSuccessfulRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalErrorRequests()).isEqualTo(0L);
     assertThat(localityStats.getTotalRequestsInProgress()).isEqualTo(31L);
-    assertThat(localityStats.getLoadMetricStatsCount()).isEqualTo(1);
-    EndpointLoadMetricStats loadMetricStats = Iterables.getOnlyElement(
-        localityStats.getLoadMetricStatsList());
-    assertThat(loadMetricStats.getMetricName()).isEqualTo("named1");
-    assertThat(loadMetricStats.getNumRequestsFinishedWithMetric()).isEqualTo(3L);
-    assertThat(loadMetricStats.getTotalMetricValue()).isEqualTo(3.14159 + 1.618 - 2.718);
 
     // Wrapping up
     verify(backoffPolicyProvider, times(2)).get();

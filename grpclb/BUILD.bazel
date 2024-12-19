@@ -1,4 +1,3 @@
-load("@rules_jvm_external//:defs.bzl", "artifact")
 load("//:java_grpc_library.bzl", "java_grpc_library")
 
 java_library(
@@ -15,12 +14,13 @@ java_library(
         "//api",
         "//context",
         "//core:internal",
+        "//core:util",
         "//stub",
-        "//util",
+        "@com_google_code_findbugs_jsr305//jar",
+        "@com_google_guava_guava//jar",
+        "@com_google_j2objc_j2objc_annotations//jar",
         "@com_google_protobuf//:protobuf_java_util",
         "@io_grpc_grpc_proto//:grpclb_load_balancer_java_proto",
-        artifact("com.google.code.findbugs:jsr305"),
-        artifact("com.google.guava:guava"),
     ],
 )
 

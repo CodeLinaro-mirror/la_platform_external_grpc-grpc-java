@@ -35,8 +35,9 @@ public class AuthorizationServerInterceptorTest {
       AuthorizationServerInterceptor.create(policy);
       fail("exception expected");
     } catch (IOException ioe) {
-      assertThat(ioe).hasMessageThat().contains("malformed JSON");
-      assertThat(ioe).hasMessageThat().contains("at line 1 column 18 path $.name");
+      assertThat(ioe).hasMessageThat().isEqualTo(
+          "Use JsonReader.setLenient(true) to accept malformed JSON"
+          + " at line 1 column 18 path $.name");
     }
   }
 

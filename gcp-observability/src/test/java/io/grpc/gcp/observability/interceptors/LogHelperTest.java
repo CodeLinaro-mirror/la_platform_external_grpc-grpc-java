@@ -66,7 +66,6 @@ import org.junit.runners.JUnit4;
 /**
  * Tests for {@link LogHelper}.
  */
-@SuppressWarnings("AddressSelection") // It will only be one address
 @RunWith(JUnit4.class)
 public class LogHelperTest {
   public static final Marshaller<byte[]> BYTEARRAY_MARSHALLER = new ByteArrayMarshaller();

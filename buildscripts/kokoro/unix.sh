@@ -23,6 +23,11 @@ readonly GRPC_JAVA_DIR="$(cd "$(dirname "$0")"/../.. && pwd)"
 # cd to the root dir of grpc-java
 cd $(dirname $0)/../..
 
+# TODO(zpencer): always make sure we are using Oracle jdk8
+if [[ -f /usr/libexec/java_home ]]; then
+    JAVA_HOME=$(/usr/libexec/java_home -v"1.8.0")
+fi
+
 # ARCH is x86_64 unless otherwise specified.
 ARCH="${ARCH:-x86_64}"
 
@@ -42,12 +47,8 @@ GRADLE_FLAGS+=" -PtargetArch=$ARCH"
 GRADLE_FLAGS+=" -Pcheckstyle.ignoreFailures=false"
 GRADLE_FLAGS+=" -PfailOnWarnings=true"
 GRADLE_FLAGS+=" -PerrorProne=true"
+GRADLE_FLAGS+=" -PskipAndroid=true"
 GRADLE_FLAGS+=" -Dorg.gradle.parallel=true"
-if [[ -z "${ALL_ARTIFACTS:-}" ]]; then
-  GRADLE_FLAGS+=" -PskipAndroid=true"
-else
-  GRADLE_FLAGS+=" -Pandroid.useAndroidX=true"
-fi
 export GRADLE_OPTS="-Dorg.gradle.jvmargs='-Xmx1g'"
 
 # Make protobuf discoverable by :grpc-compiler

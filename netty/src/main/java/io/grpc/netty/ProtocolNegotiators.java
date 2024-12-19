@@ -72,7 +72,6 @@ import java.net.URI;
 import java.nio.channels.ClosedChannelException;
 import java.util.Arrays;
 import java.util.EnumSet;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.logging.Level;
@@ -161,6 +160,41 @@ final class ProtocolNegotiators {
     }
   }
 
+  public static final class FromChannelCredentialsResult {
+    public final ProtocolNegotiator.ClientFactory negotiator;
+    public final CallCredentials callCredentials;
+    public final String error;
+
+    private FromChannelCredentialsResult(ProtocolNegotiator.ClientFactory negotiator,
+        CallCredentials creds, String error) {
+      this.negotiator = negotiator;
+      this.callCredentials = creds;
+      this.error = error;
+    }
+
+    public static FromChannelCredentialsResult error(String error) {
+      return new FromChannelCredentialsResult(
+          null, null, Preconditions.checkNotNull(error, "error"));
+    }
+
+    public static FromChannelCredentialsResult negotiator(
+        ProtocolNegotiator.ClientFactory factory) {
+      return new FromChannelCredentialsResult(
+          Preconditions.checkNotNull(factory, "factory"), null, null);
+    }
+
+    public FromChannelCredentialsResult withCallCredentials(CallCredentials callCreds) {
+      Preconditions.checkNotNull(callCreds, "callCreds");
+      if (error != null) {
+        return this;
+      }
+      if (this.callCredentials != null) {
+        callCreds = new CompositeCallCredentials(this.callCredentials, callCreds);
+      }
+      return new FromChannelCredentialsResult(negotiator, callCreds, null);
+    }
+  }
+
   public static FromServerCredentialsResult from(ServerCredentials creds) {
     if (creds instanceof TlsServerCredentials) {
       TlsServerCredentials tlsCreds = (TlsServerCredentials) creds;
@@ -236,41 +270,6 @@ final class ProtocolNegotiators {
     } else {
       return FromServerCredentialsResult.error(
           "Unsupported credential type: " + creds.getClass().getName());
-    }
-  }
-
-  public static final class FromChannelCredentialsResult {
-    public final ProtocolNegotiator.ClientFactory negotiator;
-    public final CallCredentials callCredentials;
-    public final String error;
-
-    private FromChannelCredentialsResult(ProtocolNegotiator.ClientFactory negotiator,
-        CallCredentials creds, String error) {
-      this.negotiator = negotiator;
-      this.callCredentials = creds;
-      this.error = error;
-    }
-
-    public static FromChannelCredentialsResult error(String error) {
-      return new FromChannelCredentialsResult(
-          null, null, Preconditions.checkNotNull(error, "error"));
-    }
-
-    public static FromChannelCredentialsResult negotiator(
-        ProtocolNegotiator.ClientFactory factory) {
-      return new FromChannelCredentialsResult(
-          Preconditions.checkNotNull(factory, "factory"), null, null);
-    }
-
-    public FromChannelCredentialsResult withCallCredentials(CallCredentials callCreds) {
-      Preconditions.checkNotNull(callCreds, "callCreds");
-      if (error != null) {
-        return this;
-      }
-      if (this.callCredentials != null) {
-        callCreds = new CompositeCallCredentials(this.callCredentials, callCreds);
-      }
-      return new FromChannelCredentialsResult(negotiator, callCreds, null);
     }
   }
 
@@ -544,18 +543,16 @@ final class ProtocolNegotiators {
   static final class ClientTlsProtocolNegotiator implements ProtocolNegotiator {
 
     public ClientTlsProtocolNegotiator(SslContext sslContext,
-        ObjectPool<? extends Executor> executorPool, Optional<Runnable> handshakeCompleteRunnable) {
+        ObjectPool<? extends Executor> executorPool) {
       this.sslContext = checkNotNull(sslContext, "sslContext");
       this.executorPool = executorPool;
       if (this.executorPool != null) {
         this.executor = this.executorPool.getObject();
       }
-      this.handshakeCompleteRunnable = handshakeCompleteRunnable;
     }
 
     private final SslContext sslContext;
     private final ObjectPool<? extends Executor> executorPool;
-    private final Optional<Runnable> handshakeCompleteRunnable;
     private Executor executor;
 
     @Override
@@ -568,7 +565,7 @@ final class ProtocolNegotiators {
       ChannelHandler gnh = new GrpcNegotiationHandler(grpcHandler);
       ChannelLogger negotiationLogger = grpcHandler.getNegotiationLogger();
       ChannelHandler cth = new ClientTlsHandler(gnh, sslContext, grpcHandler.getAuthority(),
-          this.executor, negotiationLogger, handshakeCompleteRunnable);
+          this.executor, negotiationLogger);
       return new WaitUntilActiveHandler(cth, negotiationLogger);
     }
 
@@ -586,18 +583,15 @@ final class ProtocolNegotiators {
     private final String host;
     private final int port;
     private Executor executor;
-    private final Optional<Runnable> handshakeCompleteRunnable;
 
     ClientTlsHandler(ChannelHandler next, SslContext sslContext, String authority,
-        Executor executor, ChannelLogger negotiationLogger,
-        Optional<Runnable> handshakeCompleteRunnable) {
+        Executor executor, ChannelLogger negotiationLogger) {
       super(next, negotiationLogger);
       this.sslContext = checkNotNull(sslContext, "sslContext");
       HostPort hostPort = parseAuthority(authority);
       this.host = hostPort.host;
       this.port = hostPort.port;
       this.executor = executor;
-      this.handshakeCompleteRunnable = handshakeCompleteRunnable;
     }
 
     @Override
@@ -626,9 +620,6 @@ final class ProtocolNegotiators {
             Exception ex =
                 unavailableException("Failed ALPN negotiation: Unable to find compatible protocol");
             logSslEngineDetails(Level.FINE, ctx, "TLS negotiation failed.", ex);
-            if (handshakeCompleteRunnable.isPresent()) {
-              handshakeCompleteRunnable.get().run();
-            }
             ctx.fireExceptionCaught(ex);
           }
         } else {
@@ -642,9 +633,6 @@ final class ProtocolNegotiators {
                 .withDescription("Connection closed while performing TLS negotiation")
                 .withCause(t)
                 .asRuntimeException();
-          }
-          if (handshakeCompleteRunnable.isPresent()) {
-            handshakeCompleteRunnable.get().run();
           }
           ctx.fireExceptionCaught(t);
         }
@@ -661,9 +649,6 @@ final class ProtocolNegotiators {
           .set(Grpc.TRANSPORT_ATTR_SSL_SESSION, session)
           .build();
       replaceProtocolNegotiationEvent(existingPne.withAttributes(attrs).withSecurity(security));
-      if (handshakeCompleteRunnable.isPresent()) {
-        handshakeCompleteRunnable.get().run();
-      }
       fireProtocolNegotiationEvent(ctx);
     }
   }
@@ -698,8 +683,8 @@ final class ProtocolNegotiators {
    * @param executorPool a dedicated {@link Executor} pool for time-consuming TLS tasks
    */
   public static ProtocolNegotiator tls(SslContext sslContext,
-      ObjectPool<? extends Executor> executorPool, Optional<Runnable> handshakeCompleteRunnable) {
-    return new ClientTlsProtocolNegotiator(sslContext, executorPool, handshakeCompleteRunnable);
+      ObjectPool<? extends Executor> executorPool) {
+    return new ClientTlsProtocolNegotiator(sslContext, executorPool);
   }
 
   /**
@@ -708,7 +693,7 @@ final class ProtocolNegotiators {
    * may happen immediately, even before the TLS Handshake is complete.
    */
   public static ProtocolNegotiator tls(SslContext sslContext) {
-    return tls(sslContext, null, Optional.empty());
+    return tls(sslContext, null);
   }
 
   public static ProtocolNegotiator.ClientFactory tlsClientFactory(SslContext sslContext) {

@@ -114,15 +114,13 @@ public abstract class ServerBuilder<T extends ServerBuilder<T>> {
   public abstract T addService(BindableService bindableService);
 
   /**
-   * Adds a list of service implementations to the handler registry together. This exists for
-   * convenience - equivalent to repeatedly calling addService() with different services.
-   * If multiple services on the list use the same name, only the last one on the list will
-   * be added.
+   * Adds a list of service implementations to the handler registry together.
    *
    * @param services the list of ServerServiceDefinition objects
    * @return this
    * @since 1.37.0
    */
+  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/7925")
   public final T addServices(List<ServerServiceDefinition> services) {
     checkNotNull(services, "services");
     for (ServerServiceDefinition service : services) {
@@ -232,13 +230,14 @@ public abstract class ServerBuilder<T extends ServerBuilder<T>> {
 
   /**
    * Sets the permitted time for new connections to complete negotiation handshakes before being
-   * killed. The default value is 2 minutes.
+   * killed.
    *
    * @return this
    * @throws IllegalArgumentException if timeout is negative
    * @throws UnsupportedOperationException if unsupported
    * @since 1.8.0
    */
+  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/3706")
   public T handshakeTimeout(long timeout, TimeUnit unit) {
     throw new UnsupportedOperationException();
   }
@@ -250,8 +249,6 @@ public abstract class ServerBuilder<T extends ServerBuilder<T>> {
    *
    * @throws IllegalArgumentException if time is not positive
    * @throws UnsupportedOperationException if unsupported
-   * @see <a href="https://github.com/grpc/proposal/blob/master/A9-server-side-conn-mgt.md">gRFC A9
-   *     Server-side Connection Management</a>
    * @since 1.47.0
    */
   @ExperimentalApi("https://github.com/grpc/grpc-java/issues/9009")
@@ -268,8 +265,6 @@ public abstract class ServerBuilder<T extends ServerBuilder<T>> {
    *
    * @throws IllegalArgumentException if timeout is not positive
    * @throws UnsupportedOperationException if unsupported
-   * @see <a href="https://github.com/grpc/proposal/blob/master/A9-server-side-conn-mgt.md">gRFC A9
-   *     Server-side Connection Management</a>
    * @since 1.47.0
    */
   @ExperimentalApi("https://github.com/grpc/grpc-java/issues/9009")
@@ -286,8 +281,6 @@ public abstract class ServerBuilder<T extends ServerBuilder<T>> {
    *
    * @throws IllegalArgumentException if idle is not positive
    * @throws UnsupportedOperationException if unsupported
-   * @see <a href="https://github.com/grpc/proposal/blob/master/A9-server-side-conn-mgt.md">gRFC A9
-   *     Server-side Connection Management</a>
    * @since 1.47.0
    */
   @ExperimentalApi("https://github.com/grpc/grpc-java/issues/9009")
@@ -303,8 +296,6 @@ public abstract class ServerBuilder<T extends ServerBuilder<T>> {
    *
    * @throws IllegalArgumentException if age is not positive
    * @throws UnsupportedOperationException if unsupported
-   * @see <a href="https://github.com/grpc/proposal/blob/master/A9-server-side-conn-mgt.md">gRFC A9
-   *     Server-side Connection Management</a>
    * @since 1.47.0
    */
   @ExperimentalApi("https://github.com/grpc/grpc-java/issues/9009")
@@ -321,8 +312,6 @@ public abstract class ServerBuilder<T extends ServerBuilder<T>> {
    * @throws IllegalArgumentException if grace is negative
    * @throws UnsupportedOperationException if unsupported
    * @see #maxConnectionAge(long, TimeUnit)
-   * @see <a href="https://github.com/grpc/proposal/blob/master/A9-server-side-conn-mgt.md">gRFC A9
-   *     Server-side Connection Management</a>
    * @since 1.47.0
    */
   @ExperimentalApi("https://github.com/grpc/grpc-java/issues/9009")
@@ -344,8 +333,6 @@ public abstract class ServerBuilder<T extends ServerBuilder<T>> {
    * @throws IllegalArgumentException if time is negative
    * @throws UnsupportedOperationException if unsupported
    * @see #permitKeepAliveWithoutCalls(boolean)
-   * @see <a href="https://github.com/grpc/proposal/blob/master/A8-client-side-keepalive.md">gRFC A8
-   *     Client-side Keepalive</a>
    * @since 1.47.0
    */
   @ExperimentalApi("https://github.com/grpc/grpc-java/issues/9009")
@@ -359,8 +346,6 @@ public abstract class ServerBuilder<T extends ServerBuilder<T>> {
    *
    * @throws UnsupportedOperationException if unsupported
    * @see #permitKeepAliveTime(long, TimeUnit)
-   * @see <a href="https://github.com/grpc/proposal/blob/master/A8-client-side-keepalive.md">gRFC A8
-   *     Client-side Keepalive</a>
    * @since 1.47.0
    */
   @ExperimentalApi("https://github.com/grpc/grpc-java/issues/9009")

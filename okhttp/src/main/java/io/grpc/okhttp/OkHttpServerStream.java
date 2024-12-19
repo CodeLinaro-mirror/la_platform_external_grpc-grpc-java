@@ -83,7 +83,7 @@ class OkHttpServerStream extends AbstractServerStream {
 
   class Sink implements AbstractServerStream.Sink {
     @Override
-    public void writeHeaders(Metadata metadata, boolean flush) {
+    public void writeHeaders(Metadata metadata) {
       try (TaskCloseable ignore =
                PerfMark.traceTask("OkHttpServerStream$Sink.writeHeaders")) {
         List<Header> responseHeaders = Headers.createResponseHeaders(metadata);
@@ -208,15 +208,13 @@ class OkHttpServerStream extends AbstractServerStream {
      * Must be called with holding the transport lock.
      */
     @Override
-    public void inboundDataReceived(okio.Buffer frame, int dataLength, int paddingLength,
-                                    boolean endOfStream) {
+    public void inboundDataReceived(okio.Buffer frame, int windowConsumed, boolean endOfStream) {
       synchronized (lock) {
         PerfMark.event("OkHttpServerTransport$FrameHandler.data", tag);
         if (endOfStream) {
           this.receivedEndOfStream = true;
         }
-        window -= dataLength + paddingLength;
-        processedWindow -= paddingLength;
+        window -= windowConsumed;
         super.inboundDataReceived(new OkHttpReadableBuffer(frame), endOfStream);
       }
     }
