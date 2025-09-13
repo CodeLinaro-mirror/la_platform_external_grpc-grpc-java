@@ -51,11 +51,6 @@ python_binary_host {
     srcs: [
         "gen_annotations.py",
     ],
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
 }
 
 gensrcs {
@@ -65,7 +60,7 @@ gensrcs {
         "gen_annotations",
     ],
     cmd: "$(location gen_annotations) $(genDir)/java && " +
-         "$(location soong_zip) -jar -o $(out) -C $(genDir)/java -D $(genDir)/java",
+        "$(location soong_zip) -jar -o $(out) -C $(genDir)/java -D $(genDir)/java",
     srcs: [
         // A dummy source file since Soong crashes otherwise.
         "Android.bp",
