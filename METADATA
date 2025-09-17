@@ -13,4 +13,7 @@ third_party {
   version: "v1.56"
   last_upgrade_date: { year: 2023 month: 06 day: 20 }
   license_type: NOTICE
+  security: {
+    tag: "NVD-CPE2.3:cpe:/a:grpc:grpc:1.56"
+  }
 }
