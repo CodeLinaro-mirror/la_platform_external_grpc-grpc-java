@@ -30,7 +30,7 @@ java_library_host {
     libs: [
         "grpc-java-api",
         "grpc-java-core",
-        "google-auth-library-credentials-0.13.0",
+        "google-auth-library-java-credentials",
         "guava",
         "jsr305",
     ],
