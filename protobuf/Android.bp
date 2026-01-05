@@ -47,3 +47,21 @@ java_library_host {
         },
     },
 }
+
+// Exposes the StatusProto for Android proto-lite usage.
+java_library {
+    name: "grpc-java-protobuf-status-lite",
+    srcs: [
+        "src/main/java/io/grpc/protobuf/StatusProto.java",
+    ],
+    libs: [
+        "grpc-java-api",
+        "grpc-java-core",
+        "grpc-java-protobuf-lite",
+        "jsr305",
+        "guava",
+    ],
+    static_libs: [
+        "googleapis-status-java-proto-lite",
+    ],
+}
