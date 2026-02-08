@@ -55,5 +55,5 @@ java_library {
         "guava",
         "perfmark-api-lib",
     ],
-    visibility: ["//packages/modules/Bluetooth/tests/pandora/server"],
+    visibility: ["//packages/modules/Bluetooth/tests/pandora:__subpackages__"],
 }
